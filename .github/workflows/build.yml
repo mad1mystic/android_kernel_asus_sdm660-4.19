@@ -1,4 +1,4 @@
-name: Build X00TD DroidSpaces KSU
+name: Build X00TD plain rsuntk test
 on:
   push:
     branches: [arena/*]
@@ -11,73 +11,33 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex pkg-config git curl tar xz-utils zip unzip cpio rsync kmod perl python3 python-is-python3 libssl-dev libelf-dev pahole libncurses-dev zlib1g-dev libyaml-dev lz4 zstd device-tree-compiler
-      - name: Download clang-r416183b from ravindu releases via git clone LineageOS
+      - name: Download clang-r416183b
         run: |
           mkdir -p ~/toolchains
           if [ ! -d ~/toolchains/clang-r416183b ]; then
             git clone --depth 1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git ~/toolchains/clang-r416183b
           fi
-          ~/toolchains/clang-r416183b/bin/clang --version
-      - name: Clone kernel arena minimal DroidSpaces KSU
+      - name: Clone rsuntk plain master
         run: |
-          git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
+          git clone https://github.com/rsuntk/android_kernel_asus_sdm660-4.19.git -b master kernel --depth 1
           cd kernel
-          echo "Defconfig lines $(wc -l < arch/arm64/configs/vendor/asus/X00TD_defconfig)"
-          grep -E "KSU|KPROBES|PID_NS|FAIR_GROUP|SYSVIPC" arch/arm64/configs/vendor/asus/X00TD_defconfig | head -n 10
-          grep -n "CGRP_ROOT_NOPREFIX" kernel/cgroup/cgroup.c -A 2 | tail -n 10
-      - name: Setup KSU-Next driver
-        run: |
-          cd kernel
-          rm -rf KernelSU-Next drivers/kernelsu
-          git clone --depth 1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
-          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
-          grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-          grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-      - name: Build defconfig X00TD
+          cat arch/arm64/configs/vendor/asus/X00TD_defconfig | wc -l
+      - name: Build defconfig plain
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
           make O=out ARCH=arm64 X00TD_defconfig
-          cat out/.config | grep -E "KSU|KPROBES|PID_NS" | head -n 10
-      - name: Build Image.gz-dtb LLVM=1
+      - name: Build Image.gz-dtb plain LLVM=1
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
           ls -lh out/arch/arm64/boot/
-          tail -n 50 /tmp/build.log
-      - name: Package AnyKernel3 OFOX correct partition block bootdevice/by-name/boot is_slot 0
-        run: |
-          cd kernel
-          IMG=out/arch/arm64/boot/Image.gz-dtb
-          if [ ! -f $IMG ]; then echo "Image.gz-dtb missing"; cat /tmp/build.log | tail -n 200; exit 1; fi
-          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cp $IMG AnyKernel3/
-          cd AnyKernel3
-          printf 'properties() {\n' > anykernel.sh
-          printf 'kernel.string=X00TD DroidSpaces KSU-Next ravindu rsuntk\n' >> anykernel.sh
-          printf 'do.devicecheck=1\n' >> anykernel.sh
-          printf 'do.modules=0\n' >> anykernel.sh
-          printf 'do.systemless=0\n' >> anykernel.sh
-          printf 'do.cleanup=1\n' >> anykernel.sh
-          printf 'do.cleanuponabort=0\n' >> anykernel.sh
-          printf 'device.name1=X00T\n' >> anykernel.sh
-          printf 'device.name2=X00TD\n' >> anykernel.sh
-          printf 'device.name3=Zenfone Max Pro M1\n' >> anykernel.sh
-          printf 'device.name4=ASUS_X00TD\n' >> anykernel.sh
-          printf 'supported.versions=\n' >> anykernel.sh
-          printf 'supported.patchlevels=\n' >> anykernel.sh
-          printf '}\n' >> anykernel.sh
-          printf 'block=/dev/block/bootdevice/by-name/boot;\n' >> anykernel.sh
-          printf 'is_slot_device=0;\n' >> anykernel.sh
-          printf 'ramdisk_compression=auto;\n' >> anykernel.sh
-          printf 'patch_vbmeta_flag=auto;\n' >> anykernel.sh
-          printf '. tools/ak3-core.sh;\n' >> anykernel.sh
-          printf 'dump_boot;\n' >> anykernel.sh
-          printf 'write_boot;\n' >> anykernel.sh
-          cat anykernel.sh
-          zip -r9 ../X00TD-DroidSpaces-KSU-Next-OFOX.zip * -x .git README.md *placeholder
-          cd ..
-          ls -lh *.zip
+      - name: Upload build log plain
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-log-plain
+          path: /tmp/build.log
