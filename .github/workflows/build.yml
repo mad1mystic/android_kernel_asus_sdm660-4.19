@@ -3,12 +3,11 @@ on:
   push:
     branches: [arena/*]
   workflow_dispatch:
-permissions: write-all
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Install deps ravindu
+      - name: Install deps
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex pkg-config git curl tar xz-utils zip unzip cpio rsync kmod perl python3 python-is-python3 libssl-dev libelf-dev pahole libncurses-dev zlib1g-dev libyaml-dev lz4 zstd device-tree-compiler
@@ -21,7 +20,7 @@ jobs:
       - name: Clone kernel
         run: |
           git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
-      - name: Setup KSU-Next
+      - name: Setup KSU
         run: |
           cd kernel
           rm -rf KernelSU-Next drivers/kernelsu
@@ -29,23 +28,19 @@ jobs:
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-      - name: Build defconfig with log capture
+      - name: Build defconfig with verbose error
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
           set +e
-          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig.log
-          echo "Exit:${PIPESTATUS[0]}" >> /tmp/defconfig.log
+          make O=out ARCH=arm64 X00TD_defconfig V=1 2>&1 | tee /tmp/defconfig.log
+          echo "Exit:${PIPESTATUS[0]}"
           cat /tmp/defconfig.log
+          # Try to show error via annotation
+          echo "::error::defconfig log tail $(cat /tmp/defconfig.log | tail -n 20 | tr '\n' ' ')"
           ls -lh out/.config 2>&1 || true
-          # Try to push log via API as file in repo
-          CONTENT=$(base64 -w 0 /tmp/defconfig.log)
-          echo "Pushing log via API"
-          gh api repos/mad1mystic/android_kernel_asus_sdm660-4.19/contents/defconfig-failure.log --method PUT --field message="defconfig log" --field content="$CONTENT" --field branch="arena/01a0e3cd-android-kernel-asus-sdm660-4-1" || echo "API push failed"
           if [ ! -f out/.config ]; then exit 1; fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build Image.gz-dtb
         run: |
           cd kernel
