@@ -21,7 +21,9 @@ jobs:
       - name: Clone kernel arena
         run: |
           git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
-      - name: Setup KSU-Next driver simple
+          cd kernel
+          ls arch/arm64/configs/vendor/asus/X00TD_defconfig -lh
+      - name: Setup KSU-Next driver
         run: |
           cd kernel
           rm -rf KernelSU-Next drivers/kernelsu
@@ -29,13 +31,19 @@ jobs:
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          cat drivers/Makefile | grep kernelsu
+          cat drivers/Kconfig | grep kernelsu
           ls drivers/kernelsu/ | head -n 5
-      - name: Build defconfig X00TD
+      - name: Build defconfig X00TD with log
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
-          make O=out ARCH=arm64 X00TD_defconfig
+          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig.log
+          echo "=== defconfig.log tail ==="
+          cat /tmp/defconfig.log | tail -n 100
+          ls out/.config -lh
+          grep -E "KSU|PID_NS" out/.config | head -n 10
       - name: Build Image.gz-dtb LLVM=1
         run: |
           cd kernel
@@ -44,7 +52,7 @@ jobs:
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
           ls -lh out/arch/arm64/boot/
           tail -n 100 /tmp/build.log
-      - name: Package AnyKernel3 OFOX correct partition
+      - name: Package AnyKernel3 OFOX
         run: |
           cd kernel
           if [ ! -f out/arch/arm64/boot/Image.gz-dtb ]; then echo "missing"; cat /tmp/build.log | tail -n 200; exit 1; fi
@@ -52,7 +60,7 @@ jobs:
           cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           cd AnyKernel3
           printf 'properties() {\n' > anykernel.sh
-          printf 'kernel.string=X00TD DroidSpaces KSU-Next ravindu rsuntk\n' >> anykernel.sh
+          printf 'kernel.string=X00TD DroidSpaces KSU-Next\n' >> anykernel.sh
           printf 'do.devicecheck=1\n' >> anykernel.sh
           printf 'do.modules=0\n' >> anykernel.sh
           printf 'do.systemless=0\n' >> anykernel.sh
