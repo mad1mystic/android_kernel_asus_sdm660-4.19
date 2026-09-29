@@ -11,19 +11,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex pkg-config git curl tar xz-utils zip unzip cpio rsync kmod perl python3 python-is-python3 libssl-dev libelf-dev pahole libncurses-dev zlib1g-dev libyaml-dev lz4 zstd device-tree-compiler
-      - name: Download clang-r416183b via git clone
+      - name: Download clang-r416183b
         run: |
           mkdir -p ~/toolchains
           if [ ! -d ~/toolchains/clang-r416183b ]; then
             git clone --depth 1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git ~/toolchains/clang-r416183b
           fi
-          ~/toolchains/clang-r416183b/bin/clang --version
-      - name: Clone kernel arena
+      - name: Clone kernel
         run: |
           git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
           cd kernel
           ls arch/arm64/configs/vendor/asus/X00TD_defconfig -lh
-      - name: Setup KSU-Next driver
+          wc -l arch/arm64/configs/vendor/asus/X00TD_defconfig
+      - name: Setup KSU-Next
         run: |
           cd kernel
           rm -rf KernelSU-Next drivers/kernelsu
@@ -31,33 +31,51 @@ jobs:
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          cat drivers/Makefile | grep kernelsu
-          cat drivers/Kconfig | grep kernelsu
-          ls drivers/kernelsu/ | head -n 5
-      - name: Build defconfig X00TD with log
+      - name: Build defconfig try both O=out and no O
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
-          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig.log
-          echo "=== defconfig.log tail ==="
-          cat /tmp/defconfig.log | tail -n 100
-          ls out/.config -lh
-          grep -E "KSU|PID_NS" out/.config | head -n 10
+          echo "Trying without O=out"
+          make ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig-noout.log || true
+          cat /tmp/defconfig-noout.log | tail -n 50
+          ls -lh .config 2>&1 || true
+          echo "Trying with O=out"
+          rm -rf out
+          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig-out.log || true
+          cat /tmp/defconfig-out.log | tail -n 100
+          ls -lh out/.config 2>&1 || true
+          # If both fail, show full logs
+          if [ ! -f .config ] && [ ! -f out/.config ]; then
+            echo "Both defconfigs failed, showing logs"
+            cat /tmp/defconfig-noout.log
+            cat /tmp/defconfig-out.log
+            exit 1
+          fi
       - name: Build Image.gz-dtb LLVM=1
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
-          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
-          ls -lh out/arch/arm64/boot/
+          if [ -f out/.config ]; then
+            make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
+            ls -lh out/arch/arm64/boot/
+          else
+            make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
+            ls -lh arch/arm64/boot/
+          fi
           tail -n 100 /tmp/build.log
       - name: Package AnyKernel3 OFOX
         run: |
           cd kernel
-          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ]; then echo "missing"; cat /tmp/build.log | tail -n 200; exit 1; fi
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            IMG=out/arch/arm64/boot/Image.gz-dtb
+          else
+            IMG=arch/arm64/boot/Image.gz-dtb
+          fi
+          if [ ! -f $IMG ]; then echo "Image.gz-dtb not found"; cat /tmp/build.log | tail -n 200; exit 1; fi
           git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cp $IMG AnyKernel3/
           cd AnyKernel3
           printf 'properties() {\n' > anykernel.sh
           printf 'kernel.string=X00TD DroidSpaces KSU-Next\n' >> anykernel.sh
