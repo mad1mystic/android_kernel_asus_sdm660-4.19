@@ -1,0 +1,134 @@
+name: Build X00TD - DroidSpaces + KSU-Next (ravindu + rsuntk)
+on:
+  push:
+    branches: [arena/*]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install deps - ravindu guide
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex pkg-config git curl tar xz-utils zip unzip cpio rsync kmod perl python3 python-is-python3 libssl-dev libelf-dev pahole libncurses-dev zlib1g-dev libyaml-dev lz4 zstd device-tree-compiler
+          echo "Deps installed"
+
+      - name: Cache toolchains - to reduce wait time
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchains
+          key: toolchains-clang-r416183b-ravindu-v1
+
+      - name: Download toolchain - ravindu's clang-r416183b (correct for rsuntk AOSP 4.19)
+        run: |
+          mkdir -p ~/toolchains
+          cd /tmp
+          if [ ! -d ~/toolchains/clang-r416183b ]; then
+            echo "Downloading clang-r416183b from ravindu releases (strictly ravindu)"
+            wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r416183b.tar.gz
+            tar xzf clang-r416183b.tar.gz
+            mv clang-r416183b ~/toolchains/
+          fi
+          ~/toolchains/clang-r416183b/bin/clang --version
+          ls ~/toolchains/
+
+      - name: Clone kernel - arena branch with DroidSpaces + KSU hooks
+        run: |
+          git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
+          cd kernel
+          git log --oneline -3
+          cat arch/arm64/configs/vendor/asus/X00TD_defconfig | grep -E "KSU|PID_NS|FAIR_GROUP|SYSVIPC" | head -n 10
+          grep -n "CGRP_ROOT_NOPREFIX" kernel/cgroup/cgroup.c -A 2 | head -n 10
+
+      - name: Setup KSU-Next driver (option2 manual hooks already in tree)
+        run: |
+          cd kernel
+          # KSU manual hooks already applied (fs/*, seccomp, reboot, selinux)
+          # Now setup driver
+          if [ ! -d KernelSU-Next ]; then
+            git clone --depth 1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+            cd KernelSU-Next
+            git fetch --tags
+            TAG=$(git describe --tags --abbrev=0)
+            echo "Checking out $TAG"
+            git checkout $TAG
+            cd ..
+          fi
+          rm -rf drivers/kernelsu
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          ls drivers/kernelsu/ | head -n 10
+
+      - name: Build defconfig X00TD
+        run: |
+          cd kernel
+          export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
+          export ARCH=arm64
+          make O=out ARCH=arm64 X00TD_defconfig
+          grep -E "KSU|PID_NS|FAIR_GROUP|SYSVIPC|CGROUP_DEVICE" out/.config | head -n 20
+
+      - name: Build Image.gz-dtb - LLVM=1 (rsuntk default, ravindu AOSP method)
+        run: |
+          cd kernel
+          export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
+          export ARCH=arm64
+          # Use LLVM=1 LLVM_IAS=1 as per rsuntk build.config.aarch64 and ravindu AOSP 4.14/5.10 method
+          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
+          ls -lh out/arch/arm64/boot/
+          echo "=== Build log tail ==="
+          tail -n 50 /tmp/build.log
+
+      - name: Package AnyKernel3 zip - correct partition for OFOX X00TD
+        run: |
+          cd kernel
+          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ]; then echo "Image.gz-dtb not found!"; cat /tmp/build.log | tail -n 100; exit 1; fi
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cd AnyKernel3
+          # Create anykernel.sh following ravindu + rsuntk + OFOX X00TD requirements
+          cat > anykernel.sh <<'AK'
+          # AnyKernel3 Ramdisk Mod Script
+          # Based on osm0sis AnyKernel3 + rsuntk X00TD + ravindu guide
+          properties() { '
+          kernel.string=X00TD DroidSpaces + KSU-Next by mad1mystic @ravindu644 @rsuntk
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=X00T
+          device.name2=X00TD
+          device.name3=Zenfone Max Pro M1
+          device.name4=ASUS_X00TD
+          device.name5=ASUS_X00T
+          supported.versions=
+          supported.patchlevels=
+          '; }
+          # Correct partition for X00TD (A-only, not A/B) - for OFOX
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AK
+          cat anykernel.sh
+          zip -r9 ../X00TD-DroidSpaces-KSU-Next-$(date +%Y%m%d)-ravindu-rsuntk.zip * -x .git README.md *placeholder
+          cd ..
+          ls -lh *.zip
+          echo "Zip uses block=$block is_slot_device=0 for OFOX"
+
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: X00TD-DroidSpaces-KSU-Next-OFOX
+          path: kernel/*.zip
+
+      - name: Upload Image.gz-dtb
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image-gz-dtb
+          path: kernel/out/arch/arm64/boot/Image.gz-dtb
