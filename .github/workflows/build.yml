@@ -7,20 +7,25 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Install deps
+      - name: Install deps ravindu
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex pkg-config git curl tar xz-utils zip unzip cpio rsync kmod perl python3 python-is-python3 libssl-dev libelf-dev pahole libncurses-dev zlib1g-dev libyaml-dev lz4 zstd device-tree-compiler
-      - name: Download clang-r416183b
+      - name: Download clang-r416183b from ravindu releases via git clone LineageOS
         run: |
           mkdir -p ~/toolchains
           if [ ! -d ~/toolchains/clang-r416183b ]; then
             git clone --depth 1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git ~/toolchains/clang-r416183b
           fi
-      - name: Clone kernel
+          ~/toolchains/clang-r416183b/bin/clang --version
+      - name: Clone kernel arena minimal DroidSpaces KSU
         run: |
           git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
-      - name: Setup KSU
+          cd kernel
+          echo "Defconfig lines $(wc -l < arch/arm64/configs/vendor/asus/X00TD_defconfig)"
+          grep -E "KSU|KPROBES|PID_NS|FAIR_GROUP|SYSVIPC" arch/arm64/configs/vendor/asus/X00TD_defconfig | head -n 10
+          grep -n "CGRP_ROOT_NOPREFIX" kernel/cgroup/cgroup.c -A 2 | tail -n 10
+      - name: Setup KSU-Next driver
         run: |
           cd kernel
           rm -rf KernelSU-Next drivers/kernelsu
@@ -28,35 +33,31 @@ jobs:
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-      - name: Build defconfig with verbose error
+      - name: Build defconfig X00TD
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
-          set +e
-          make O=out ARCH=arm64 X00TD_defconfig V=1 2>&1 | tee /tmp/defconfig.log
-          echo "Exit:${PIPESTATUS[0]}"
-          cat /tmp/defconfig.log
-          # Try to show error via annotation
-          echo "::error::defconfig log tail $(cat /tmp/defconfig.log | tail -n 20 | tr '\n' ' ')"
-          ls -lh out/.config 2>&1 || true
-          if [ ! -f out/.config ]; then exit 1; fi
-      - name: Build Image.gz-dtb
+          make O=out ARCH=arm64 X00TD_defconfig
+          cat out/.config | grep -E "KSU|KPROBES|PID_NS" | head -n 10
+      - name: Build Image.gz-dtb LLVM=1
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
           ls -lh out/arch/arm64/boot/
-      - name: Package AnyKernel3 OFOX
+          tail -n 50 /tmp/build.log
+      - name: Package AnyKernel3 OFOX correct partition block bootdevice/by-name/boot is_slot 0
         run: |
           cd kernel
           IMG=out/arch/arm64/boot/Image.gz-dtb
+          if [ ! -f $IMG ]; then echo "Image.gz-dtb missing"; cat /tmp/build.log | tail -n 200; exit 1; fi
           git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cp $IMG AnyKernel3/
           cd AnyKernel3
           printf 'properties() {\n' > anykernel.sh
-          printf 'kernel.string=X00TD DroidSpaces KSU-Next\n' >> anykernel.sh
+          printf 'kernel.string=X00TD DroidSpaces KSU-Next ravindu rsuntk\n' >> anykernel.sh
           printf 'do.devicecheck=1\n' >> anykernel.sh
           printf 'do.modules=0\n' >> anykernel.sh
           printf 'do.systemless=0\n' >> anykernel.sh
@@ -76,6 +77,7 @@ jobs:
           printf '. tools/ak3-core.sh;\n' >> anykernel.sh
           printf 'dump_boot;\n' >> anykernel.sh
           printf 'write_boot;\n' >> anykernel.sh
+          cat anykernel.sh
           zip -r9 ../X00TD-DroidSpaces-KSU-Next-OFOX.zip * -x .git README.md *placeholder
           cd ..
           ls -lh *.zip
