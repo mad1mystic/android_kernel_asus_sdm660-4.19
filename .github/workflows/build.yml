@@ -11,41 +11,31 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex pkg-config git curl tar xz-utils zip unzip cpio rsync kmod perl python3 python-is-python3 libssl-dev libelf-dev pahole libncurses-dev zlib1g-dev libyaml-dev lz4 zstd device-tree-compiler
-      - name: Download clang-r416183b via git clone LineageOS (same as ravindu r416183b, correct for rsuntk)
+      - name: Download clang-r416183b via git clone
         run: |
           mkdir -p ~/toolchains
           if [ ! -d ~/toolchains/clang-r416183b ]; then
             git clone --depth 1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git ~/toolchains/clang-r416183b
           fi
           ~/toolchains/clang-r416183b/bin/clang --version
-          ls ~/toolchains/clang-r416183b/bin/ | head -n 10
-      - name: Clone kernel arena with DroidSpaces KSU
+      - name: Clone kernel arena
         run: |
           git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
-          cd kernel
-          cat arch/arm64/configs/vendor/asus/X00TD_defconfig | grep -E "KSU|PID_NS|FAIR_GROUP" | head -n 5
-          grep -n "CGRP_ROOT_NOPREFIX" kernel/cgroup/cgroup.c -A 2 | head -n 10
-      - name: Setup KSU-Next driver
+      - name: Setup KSU-Next driver simple
         run: |
           cd kernel
+          rm -rf KernelSU-Next drivers/kernelsu
           git clone --depth 1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
-          cd KernelSU-Next
-          git fetch --tags
-          TAG=$(git describe --tags --abbrev=0)
-          echo "KSU tag $TAG"
-          git checkout $TAG
-          cd ..
-          rm -rf drivers/kernelsu
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          ls drivers/kernelsu/ | head -n 5
       - name: Build defconfig X00TD
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
           make O=out ARCH=arm64 X00TD_defconfig
-          grep -E "KSU|PID_NS" out/.config | head -n 10
       - name: Build Image.gz-dtb LLVM=1
         run: |
           cd kernel
@@ -57,7 +47,7 @@ jobs:
       - name: Package AnyKernel3 OFOX correct partition
         run: |
           cd kernel
-          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ]; then echo "Image.gz-dtb missing"; cat /tmp/build.log | tail -n 200; exit 1; fi
+          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ]; then echo "missing"; cat /tmp/build.log | tail -n 200; exit 1; fi
           git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           cd AnyKernel3
@@ -82,7 +72,6 @@ jobs:
           printf '. tools/ak3-core.sh;\n' >> anykernel.sh
           printf 'dump_boot;\n' >> anykernel.sh
           printf 'write_boot;\n' >> anykernel.sh
-          cat anykernel.sh
           zip -r9 ../X00TD-DroidSpaces-KSU-Next-OFOX.zip * -x .git README.md *placeholder
           cd ..
           ls -lh *.zip
