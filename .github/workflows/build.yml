@@ -21,9 +21,6 @@ jobs:
       - name: Clone kernel
         run: |
           git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
-          cd kernel
-          echo "Defconfig lines $(wc -l < arch/arm64/configs/vendor/asus/X00TD_defconfig)"
-          grep -E "KSU|KPROBES|PID_NS" arch/arm64/configs/vendor/asus/X00TD_defconfig | head -n 10
       - name: Setup KSU-Next
         run: |
           cd kernel
@@ -32,39 +29,23 @@ jobs:
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          ls drivers/kernelsu/Kconfig -lh
-          cat drivers/Kconfig | tail -n 10
-      - name: Build defconfig debug
+      - name: Build defconfig with log capture
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
           set +e
-          echo "=== Try defconfig without KSU ==="
-          cp arch/arm64/configs/vendor/asus/X00TD_defconfig /tmp/X00TD_with_ksu
-          sed -i '/CONFIG_KSU/d' arch/arm64/configs/vendor/asus/X00TD_defconfig
-          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig-no-ksu.log
-          echo "Exit no-ksu: ${PIPESTATUS[0]}" | tee -a /tmp/defconfig-no-ksu.log
-          cat /tmp/defconfig-no-ksu.log | tail -n 100
-          echo "=== Try defconfig with KSU ==="
-          cp /tmp/X00TD_with_ksu arch/arm64/configs/vendor/asus/X00TD_defconfig
-          rm -rf out
-          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig-with-ksu.log
-          echo "Exit with-ksu: ${PIPESTATUS[0]}" | tee -a /tmp/defconfig-with-ksu.log
-          cat /tmp/defconfig-with-ksu.log | tail -n 200
+          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig.log
+          echo "Exit:${PIPESTATUS[0]}" >> /tmp/defconfig.log
+          cat /tmp/defconfig.log
           ls -lh out/.config 2>&1 || true
-          # Combine logs for issue
-          cat /tmp/defconfig-no-ksu.log > /tmp/combined.log
-          echo "---WITH KSU---" >> /tmp/combined.log
-          cat /tmp/defconfig-with-ksu.log >> /tmp/combined.log
-          if [ ! -f out/.config ]; then
-            echo "DEFCONFIG FAILED, creating issue"
-            BODY=$(cat /tmp/combined.log | tail -c 50000 | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
-            echo "{\"title\":\"defconfig failed $(date)\",\"body\":$BODY}" > /tmp/payload.json
-            curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" https://api.github.com/repos/mad1mystic/android_kernel_asus_sdm660-4.19/issues -d @/tmp/payload.json | head -n 20
-            echo "curl done"
-            exit 1
-          fi
+          # Try to push log via API as file in repo
+          CONTENT=$(base64 -w 0 /tmp/defconfig.log)
+          echo "Pushing log via API"
+          gh api repos/mad1mystic/android_kernel_asus_sdm660-4.19/contents/defconfig-failure.log --method PUT --field message="defconfig log" --field content="$CONTENT" --field branch="arena/01a0e3cd-android-kernel-asus-sdm660-4-1" || echo "API push failed"
+          if [ ! -f out/.config ]; then exit 1; fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build Image.gz-dtb
         run: |
           cd kernel
@@ -76,7 +57,6 @@ jobs:
         run: |
           cd kernel
           IMG=out/arch/arm64/boot/Image.gz-dtb
-          if [ ! -f $IMG ]; then echo "missing"; exit 1; fi
           git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cp $IMG AnyKernel3/
           cd AnyKernel3
