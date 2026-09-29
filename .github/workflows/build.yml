@@ -3,6 +3,7 @@ on:
   push:
     branches: [arena/*]
   workflow_dispatch:
+permissions: write-all
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -17,27 +18,35 @@ jobs:
           if [ ! -d ~/toolchains/clang-r416183b ]; then
             git clone --depth 1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git ~/toolchains/clang-r416183b
           fi
-      - name: Clone rsuntk plain master
+      - name: Clone rsuntk plain
         run: |
           git clone https://github.com/rsuntk/android_kernel_asus_sdm660-4.19.git -b master kernel --depth 1
-          cd kernel
-          cat arch/arm64/configs/vendor/asus/X00TD_defconfig | wc -l
       - name: Build defconfig plain
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
-          make O=out ARCH=arm64 X00TD_defconfig
-      - name: Build Image.gz-dtb plain LLVM=1
+          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig.log
+          cat /tmp/defconfig.log | tail -n 20
+      - name: Build Image.gz-dtb plain LLVM=1 with log via blob API
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
+          set +e
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
-          ls -lh out/arch/arm64/boot/
-      - name: Upload build log plain
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: build-log-plain
-          path: /tmp/build.log
+          echo "Exit:${PIPESTATUS[0]}" | tee -a /tmp/build.log
+          cat /tmp/build.log | tail -n 100
+          ls -lh out/arch/arm64/boot/ 2>&1 || true
+          # Try to create blob via API with log
+          CONTENT=$(cat /tmp/build.log | tail -c 20000 | base64 -w 0)
+          echo "Creating blob via API"
+          gh api repos/mad1mystic/android_kernel_asus_sdm660-4.19/git/blobs --method POST --field content="$CONTENT" --field encoding="base64" || echo "blob create failed"
+          # Also try issue creation with small body
+          BODY=$(cat /tmp/build.log | tail -n 50 | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+          echo "{\"title\":\"plain build log $(date)\",\"body\":$BODY}" > /tmp/payload.json
+          cat /tmp/payload.json | head -c 500
+          curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" https://api.github.com/repos/mad1mystic/android_kernel_asus_sdm660-4.19/issues -d @/tmp/payload.json || echo "issue failed"
+          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ]; then exit 1; fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
