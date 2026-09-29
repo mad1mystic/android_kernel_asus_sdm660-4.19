@@ -3,6 +3,7 @@ on:
   push:
     branches: [arena/*]
   workflow_dispatch:
+permissions: write-all
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -20,9 +21,6 @@ jobs:
       - name: Clone kernel
         run: |
           git clone https://github.com/mad1mystic/android_kernel_asus_sdm660-4.19.git -b arena/01a0e3cd-android-kernel-asus-sdm660-4-1 kernel --depth 1
-          cd kernel
-          ls arch/arm64/configs/vendor/asus/X00TD_defconfig -lh
-          wc -l arch/arm64/configs/vendor/asus/X00TD_defconfig
       - name: Setup KSU-Next
         run: |
           cd kernel
@@ -31,25 +29,30 @@ jobs:
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-      - name: Build defconfig try both O=out and no O
+      - name: Build defconfig X00TD
         run: |
           cd kernel
           export PATH=$HOME/toolchains/clang-r416183b/bin:$PATH
           export ARCH=arm64
-          echo "Trying without O=out"
-          make ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig-noout.log || true
-          cat /tmp/defconfig-noout.log | tail -n 50
-          ls -lh .config 2>&1 || true
-          echo "Trying with O=out"
+          echo "=== Trying defconfig without O ==="
+          make ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig-noout.log; echo "exit:$?" | tee -a /tmp/defconfig-noout.log
+          cat /tmp/defconfig-noout.log | tail -n 100
+          echo "=== Trying defconfig with O=out ==="
           rm -rf out
-          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig-out.log || true
-          cat /tmp/defconfig-out.log | tail -n 100
-          ls -lh out/.config 2>&1 || true
-          # If both fail, show full logs
+          make O=out ARCH=arm64 X00TD_defconfig 2>&1 | tee /tmp/defconfig-out.log; echo "exit:$?" | tee -a /tmp/defconfig-out.log
+          cat /tmp/defconfig-out.log | tail -n 200
+          ls -lh .config out/.config 2>&1 || true
+          # Save logs for issue
+          cat /tmp/defconfig-noout.log > /tmp/combined.log
+          echo "---OUT LOG---" >> /tmp/combined.log
+          cat /tmp/defconfig-out.log >> /tmp/combined.log
+          # Check if .config exists
           if [ ! -f .config ] && [ ! -f out/.config ]; then
-            echo "Both defconfigs failed, showing logs"
-            cat /tmp/defconfig-noout.log
-            cat /tmp/defconfig-out.log
+            echo "DEFCONFIG FAILED"
+            # Create issue with log via curl
+            BODY=$(cat /tmp/combined.log | tail -c 60000 | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+            echo "{\"title\":\"defconfig failed $(date)\",\"body\":$BODY}" > /tmp/payload.json
+            curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" https://api.github.com/repos/mad1mystic/android_kernel_asus_sdm660-4.19/issues -d @/tmp/payload.json || echo "issue create failed"
             exit 1
           fi
       - name: Build Image.gz-dtb LLVM=1
@@ -64,16 +67,11 @@ jobs:
             make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee /tmp/build.log
             ls -lh arch/arm64/boot/
           fi
-          tail -n 100 /tmp/build.log
       - name: Package AnyKernel3 OFOX
         run: |
           cd kernel
-          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
-            IMG=out/arch/arm64/boot/Image.gz-dtb
-          else
-            IMG=arch/arm64/boot/Image.gz-dtb
-          fi
-          if [ ! -f $IMG ]; then echo "Image.gz-dtb not found"; cat /tmp/build.log | tail -n 200; exit 1; fi
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then IMG=out/arch/arm64/boot/Image.gz-dtb; else IMG=arch/arm64/boot/Image.gz-dtb; fi
+          if [ ! -f $IMG ]; then echo "missing"; cat /tmp/build.log | tail -n 200; exit 1; fi
           git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cp $IMG AnyKernel3/
           cd AnyKernel3
