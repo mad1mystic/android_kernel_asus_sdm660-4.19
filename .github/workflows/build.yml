@@ -66,6 +66,8 @@ jobs:
           CONFIG_PID_NS=y
           CONFIG_UTS_NS=y
           CONFIG_IPC_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_SYSVIPC=y
           EOF
 
       - name: Cache toolchain
@@ -168,6 +170,8 @@ jobs:
           CONFIG_PID_NS=y
           CONFIG_UTS_NS=y
           CONFIG_IPC_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_SYSVIPC=y
           EOF
 
       - name: Cache toolchain
