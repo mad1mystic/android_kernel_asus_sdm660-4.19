@@ -156,6 +156,8 @@ jobs:
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
           export CI_ZIPNAME="X00TD-Droidspaces-noKSU-$(date +%Y%m%d-%H%M)-$sha.zip"
+          echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
+          echo "KSHA=$sha" >> "$GITHUB_ENV"
           cd ksrc
           bash ../authorci/build.sh
           test -s "$CI_ZIPNAME"
@@ -166,6 +168,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          sha=$(git -C ksrc rev-parse --short HEAD)
           gh release create "X00TD-noKSU-$(date +%Y%m%d-%H%M)-$sha" "$CI_ZIPNAME" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces (no KSU) - $sha" --notes "Droidspaces kernel WITHOUT KernelSU. Stable baseline."
 
   build-ksu:
@@ -308,6 +311,8 @@ jobs:
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
           export CI_ZIPNAME="X00TD-Droidspaces-KSU-$(date +%Y%m%d-%H%M)-$sha.zip"
+          echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
+          echo "KSHA=$sha" >> "$GITHUB_ENV"
           cd ksrc
           bash ../authorci/build.sh
           test -s "$CI_ZIPNAME"
@@ -318,4 +323,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          sha=$(git -C ksrc rev-parse --short HEAD)
           gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "$CI_ZIPNAME" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH KernelSU. May be unstable."
