@@ -167,7 +167,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: X00TD-Droidspaces-noKSU
-          path: ${{ env.CI_ZIPNAME }}
+          path: ksrc/X00TD-Droidspaces-noKSU-*.zip
           retention-days: 30
 
       - name: Publish release (NO KSU)
@@ -176,7 +176,7 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          gh release create "X00TD-noKSU-$(date +%Y%m%d-%H%M)-$sha" "$CI_ZIPNAME" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces (no KSU) - $sha" --notes "Droidspaces kernel WITHOUT KernelSU. Stable baseline."
+          gh release create "X00TD-noKSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-noKSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces (no KSU) - $sha" --notes "Droidspaces kernel WITHOUT KernelSU. Stable baseline."
 
   build-ksu:
     if: inputs.BUILD_VARIANT == 'both' || inputs.BUILD_VARIANT == 'ksu'
@@ -329,7 +329,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: X00TD-Droidspaces-KSU
-          path: ${{ env.CI_ZIPNAME }}
+          path: ksrc/X00TD-Droidspaces-KSU-*.zip
           retention-days: 30
 
       - name: Publish release (WITH KSU)
@@ -338,4 +338,4 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "$CI_ZIPNAME" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH KernelSU. May be unstable."
+          gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH KernelSU. May be unstable."
