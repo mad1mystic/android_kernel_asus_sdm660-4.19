@@ -163,6 +163,13 @@ jobs:
           test -s "$CI_ZIPNAME"
           test -s out/arch/arm64/boot/Image.gz-dtb
 
+      - name: Upload artifact (NO KSU)
+        uses: actions/upload-artifact@v5
+        with:
+          name: X00TD-Droidspaces-noKSU
+          path: ${{ env.CI_ZIPNAME }}
+          retention-days: 30
+
       - name: Publish release (NO KSU)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -317,6 +324,13 @@ jobs:
           bash ../authorci/build.sh
           test -s "$CI_ZIPNAME"
           test -s out/arch/arm64/boot/Image.gz-dtb
+
+      - name: Upload artifact (WITH KSU)
+        uses: actions/upload-artifact@v5
+        with:
+          name: X00TD-Droidspaces-KSU
+          path: ${{ env.CI_ZIPNAME }}
+          retention-days: 30
 
       - name: Publish release (WITH KSU)
         env:
