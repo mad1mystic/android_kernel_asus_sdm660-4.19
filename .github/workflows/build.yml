@@ -1,0 +1,242 @@
+name: Build X00TD Droidspaces Kernel
+on:
+  workflow_dispatch:
+    inputs:
+      KERNEL_REF:
+        description: 'Upstream commit/branch. Default = exact commit of your running kernel. Use master for latest.'
+        default: '10c44ec0426da718dab42c83600d7851576a6be9'
+      KSU_URL:
+        description: 'KernelSU setup script (same source the author uses)'
+        default: 'https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh'
+      KSU_BRANCH:
+        description: 'KernelSU branch'
+        default: 'master'
+
+permissions:
+  contents: write
+
+env:
+  KERNEL_REPO: https://github.com/rsuntk/android_kernel_asus_sdm660-4.19
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout this repo (reference files only)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: reference
+
+      - name: Checkout author's build scripts
+        uses: actions/checkout@v5
+        with:
+          repository: rsuntk/asus_kernel_action
+          path: authorci
+
+      - name: Fetch kernel source
+        run: |
+          set -euo pipefail
+          echo "Author scripts commit: $(git -C authorci rev-parse HEAD)"
+          mkdir ksrc && cd ksrc
+          git init -q
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "${{ inputs.KERNEL_REF }}"
+          git checkout -q FETCH_HEAD
+          echo "Kernel commit: $(git rev-parse HEAD)"
+          test -f arch/arm64/configs/vendor/asus/X00TD_defconfig
+          test -f arch/arm64/configs/vendor/extra/ksu.config || { echo "::error::vendor/extra/ksu.config missing at this commit. Use KERNEL_REF=master"; exit 1; }
+
+      - name: Add KernelSU (author's method)
+        run: |
+          set -euo pipefail
+          cd ksrc
+          curl -LSs "${{ inputs.KSU_URL }}" | bash -s "${{ inputs.KSU_BRANCH }}"
+
+      - name: Apply Droidspaces patches
+        run: |
+          set -euo pipefail
+          git clone -q --depth=1 https://github.com/ravindu644/Droidspaces-OSS.git "$RUNNER_TEMP/ds"
+          cd ksrc
+          : > "$RUNNER_TEMP/skipped.txt"
+          shopt -s nullglob
+          found=0
+          for p in "$RUNNER_TEMP"/ds/Documentation/resources/kernel-patches/non-GKI/*.patch; do
+            found=1
+            n=$(basename "$p")
+            echo "== $n"
+            if patch -p1 --dry-run -s < "$p" >/dev/null 2>&1; then
+              patch -p1 < "$p"
+            elif patch -R -p1 --dry-run -s < "$p" >/dev/null 2>&1; then
+              echo "already applied, skipping"
+            else
+              echo "::warning::Patch does not apply, skipped: $n"
+              echo "- $n" >> "$RUNNER_TEMP/skipped.txt"
+              echo "   files this patch touches:"
+              grep -E '^\+\+\+ ' "$p" | sed -E 's#^\+\+\+ [ab]/##; s#[[:space:]].*$##' | while read -r f; do
+                if [ -f "$f" ]; then echo "     exists : $f"; else echo "     MISSING: $f"; fi
+              done
+              echo "   dry-run output:"
+              patch -p1 --dry-run < "$p" 2>&1 | head -n 8 | sed 's/^/     /' || true
+            fi
+          done
+          [ "$found" = 1 ] || { echo "::error::no Droidspaces patches found"; exit 1; }
+
+      - name: Compatibility fix (data_race)
+        run: |
+          set -euo pipefail
+          cd ksrc
+          if grep -q 'data_race' mm/page_counter.c && ! grep -rqE '^[[:space:]]*#[[:space:]]*define[[:space:]]+data_race' include/; then
+            H=include/linux/compiler.h
+            n=$(grep -n '^#endif.*__LINUX_COMPILER_H' "$H" | tail -n 1 | cut -d: -f1 || true)
+            [ -n "$n" ] || { echo "::error::cannot find end of $H"; exit 1; }
+            awk -v n="$n" 'NR==n{print "#ifndef data_race"; print "#define data_race(expr) ({ typeof(expr) __v = (expr); __v; })"; print "#endif"} {print}' "$H" > /tmp/compiler.h.new
+            cp /tmp/compiler.h.new "$H"
+            echo "Added data_race() to $H"
+          else
+            echo "data_race fix not needed"
+          fi
+
+      - name: Write Droidspaces config fragment
+        run: |
+          cat > ksrc/arch/arm64/configs/vendor/extra/droidspaces.config <<'EOF'
+          CONFIG_SYSCTL=y
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_NAMESPACES=y
+          CONFIG_PID_NS=y
+          CONFIG_UTS_NS=y
+          CONFIG_IPC_NS=y
+          CONFIG_SECCOMP=y
+          CONFIG_SECCOMP_FILTER=y
+          CONFIG_CGROUPS=y
+          CONFIG_CGROUP_DEVICE=y
+          CONFIG_CGROUP_PIDS=y
+          CONFIG_MEMCG=y
+          CONFIG_CGROUP_SCHED=y
+          CONFIG_FAIR_GROUP_SCHED=y
+          CONFIG_CGROUP_FREEZER=y
+          CONFIG_CGROUP_NET_PRIO=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_OVERLAY_FS=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_FW_LOADER=y
+          CONFIG_FW_LOADER_USER_HELPER=y
+          CONFIG_NET_NS=y
+          CONFIG_VETH=y
+          CONFIG_BRIDGE=y
+          CONFIG_NETFILTER=y
+          CONFIG_BRIDGE_NETFILTER=y
+          CONFIG_NETFILTER_ADVANCED=y
+          CONFIG_NF_CONNTRACK=y
+          CONFIG_IP_NF_IPTABLES=y
+          CONFIG_IP_NF_FILTER=y
+          CONFIG_NF_NAT=y
+          CONFIG_NF_TABLES=y
+          CONFIG_IP_NF_TARGET_MASQUERADE=y
+          CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
+          CONFIG_NETFILTER_XT_TARGET_TCPMSS=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NF_CONNTRACK_NETLINK=y
+          CONFIG_NF_NAT_REDIRECT=y
+          CONFIG_IP_ADVANCED_ROUTER=y
+          CONFIG_IP_MULTIPLE_TABLES=y
+          CONFIG_NF_CONNTRACK_IPV4=y
+          CONFIG_NF_NAT_IPV4=y
+          CONFIG_IP_NF_NAT=y
+          # CONFIG_ANDROID_PARANOID_NETWORK is not set
+          CONFIG_USER_NS=y
+          EOF
+
+      - name: Cache toolchain
+        id: tc
+        uses: actions/cache@v5
+        with:
+          path: ~/neutron-clang
+          key: neutron-clang-06092026
+
+      - name: Install deps
+        run: bash authorci/build.sh --setup-deps
+
+      - name: Fetch toolchain
+        if: steps.tc.outputs.cache-hit != 'true'
+        env:
+          COMP_OPTION: llvm
+          TG_UPLOAD: "false"
+        run: bash authorci/build.sh --fetch-toolchains
+
+      - name: Verify config BEFORE compiling
+        run: |
+          set +e
+          set -u
+          source "$GITHUB_WORKSPACE/authorci/env-llvm.sh"
+          clang --version | head -n 1 || { echo "::error::clang not found in toolchain"; exit 1; }
+          cd ksrc
+          M="make ARCH=arm64 LLVM=1 LLVM_IAS=1"
+          D=vendor/asus/X00TD_defconfig
+          $M O=out-base $D vendor/extra/ksu.config > /tmp/base.log 2>&1 || { tail -n 40 /tmp/base.log; echo "::error::baseline defconfig failed"; exit 1; }
+          $M O=out $D vendor/extra/ksu.config vendor/extra/droidspaces.config > /tmp/cfg.log 2>&1 || { tail -n 40 /tmp/cfg.log; echo "::error::defconfig failed"; exit 1; }
+          bad=0
+          for s in SYSCTL SYSVIPC POSIX_MQUEUE NAMESPACES PID_NS UTS_NS IPC_NS NET_NS USER_NS SECCOMP SECCOMP_FILTER CGROUPS CGROUP_DEVICE CGROUP_PIDS MEMCG CGROUP_SCHED FAIR_GROUP_SCHED CGROUP_FREEZER DEVTMPFS OVERLAY_FS VETH BRIDGE KSU; do
+            if ! grep -qx "CONFIG_$s=y" out/.config; then echo "::error::MISSING required CONFIG_$s"; bad=1; fi
+          done
+          echo "--- optional options that did not stick (informational) ---"
+          for l in $(grep -E '^CONFIG_.*=y$' arch/arm64/configs/vendor/extra/droidspaces.config); do
+            grep -qx "$l" out/.config || echo "not set: $l"
+          done
+          grep -E '^(CONFIG_|# CONFIG_)' out-base/.config | sort > /tmp/base.cfg
+          grep -E '^(CONFIG_|# CONFIG_)' out/.config | sort > /tmp/new.cfg
+          echo "--- config changes vs baseline (first 80) ---"
+          diff /tmp/base.cfg /tmp/new.cfg | grep '^[<>]' | head -n 80
+          if [ -f "$GITHUB_WORKSPACE/reference/config.gz" ]; then
+            zcat "$GITHUB_WORKSPACE/reference/config.gz" | grep -E '^(CONFIG_|# CONFIG_)' | sort > /tmp/run.cfg
+            echo "--- baseline vs your running kernel config (first 40) ---"
+            diff /tmp/run.cfg /tmp/base.cfg | grep '^[<>]' | head -n 40
+          fi
+          rm -rf out-base
+          if [ "$bad" != 0 ]; then echo "Config check FAILED"; exit 1; fi
+          echo "Config check passed"
+
+      - name: Build kernel and AnyKernel3 zip
+        env:
+          COMP_OPTION: llvm
+          TG_UPLOAD: "false"
+          KCFLAGS_W: "false"
+          DEVICE_TARGET: X00TD
+          EXTRA_CONFIG: vendor/extra/ksu.config vendor/extra/droidspaces.config
+          MAKEFLAGS: -k
+        run: |
+          set -euo pipefail
+          sha=$(git -C ksrc rev-parse --short HEAD)
+          export CI_ZIPNAME="X00TD-VivLOS-Droidspaces-$(date +%Y%m%d-%H%M)-$sha.zip"
+          echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
+          echo "KSHA=$sha" >> "$GITHUB_ENV"
+          cd ksrc
+          bash ../authorci/build.sh
+          test -s "$CI_ZIPNAME"
+          unzip -l "$CI_ZIPNAME" | grep -E 'Image.gz-dtb|anykernel.sh'
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Upstream commit: $(git -C ksrc rev-parse HEAD)"
+            echo "Flash in OrangeFox. Restore your boot.img backup if it fails to boot."
+            if [ -s "$RUNNER_TEMP/skipped.txt" ]; then echo; echo "Droidspaces patches NOT applied:"; cat "$RUNNER_TEMP/skipped.txt"; fi
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "X00TD-$(date +%Y%m%d-%H%M)-$KSHA" "ksrc/$ZIPNAME" --repo "$GITHUB_REPOSITORY" --prerelease --title "$ZIPNAME" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Upload debug files
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: debug
+          include-hidden-files: true
+          path: |
+            ksrc/out/.config
+            ksrc/out/compilation.log
+          retention-days: 7
