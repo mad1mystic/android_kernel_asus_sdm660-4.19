@@ -126,7 +126,6 @@ jobs:
           CONFIG_IP_NF_NAT=y
           # CONFIG_ANDROID_PARANOID_NETWORK is not set
           CONFIG_USER_NS=y
-          CONFIG_DEBUG_FS=y
           EOF
 
       - name: Cache toolchain
@@ -153,7 +152,6 @@ jobs:
           KCFLAGS_W: "false"
           DEVICE_TARGET: X00TD
           EXTRA_CONFIG: vendor/extra/droidspaces.config
-          MAKEFLAGS: -k
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
@@ -280,7 +278,6 @@ jobs:
           CONFIG_IP_NF_NAT=y
           # CONFIG_ANDROID_PARANOID_NETWORK is not set
           CONFIG_USER_NS=y
-          CONFIG_DEBUG_FS=y
           EOF
 
       - name: Cache toolchain
@@ -307,7 +304,6 @@ jobs:
           KCFLAGS_W: "false"
           DEVICE_TARGET: X00TD
           EXTRA_CONFIG: vendor/extra/ksu.config vendor/extra/droidspaces.config
-          MAKEFLAGS: -k
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
