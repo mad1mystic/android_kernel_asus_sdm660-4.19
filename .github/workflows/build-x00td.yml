@@ -75,9 +75,32 @@ jobs:
             else
               echo "::warning::Patch does not apply, skipped: $n"
               echo "- $n" >> "$RUNNER_TEMP/skipped.txt"
+              echo "   files this patch touches:"
+              grep -E '^\+\+\+ ' "$p" | sed -E 's#^\+\+\+ [ab]/##; s#[[:space:]].*$##' | while read -r f; do
+                if [ -f "$f" ]; then echo "     exists : $f"; else echo "     MISSING: $f"; fi
+              done
+              echo "   dry-run output:"
+              patch -p1 --dry-run < "$p" 2>&1 | head -n 8 | sed 's/^/     /' || true
             fi
           done
           [ "$found" = 1 ] || { echo "::error::no Droidspaces patches found"; exit 1; }
+
+      # Enabling MEMCG compiles mm/page_counter.c, which this tree ships using
+      # data_race() without defining it (the running kernel never built that file).
+      - name: Compatibility fix (data_race)
+        run: |
+          set -euo pipefail
+          cd ksrc
+          if grep -q 'data_race' mm/page_counter.c && ! grep -rqE '^[[:space:]]*#[[:space:]]*define[[:space:]]+data_race' include/; then
+            H=include/linux/compiler.h
+            n=$(grep -n '^#endif.*__LINUX_COMPILER_H' "$H" | tail -n 1 | cut -d: -f1 || true)
+            [ -n "$n" ] || { echo "::error::cannot find end of $H"; exit 1; }
+            awk -v n="$n" 'NR==n{print "#ifndef data_race"; print "#define data_race(expr) ({ typeof(expr) __v = (expr); __v; })"; print "#endif"} {print}' "$H" > /tmp/compiler.h.new
+            cp /tmp/compiler.h.new "$H"
+            echo "Added data_race() to $H"
+          else
+            echo "data_race fix not needed"
+          fi
 
       - name: Write Droidspaces config fragment
         run: |
@@ -193,6 +216,7 @@ jobs:
           KCFLAGS_W: "false"
           DEVICE_TARGET: X00TD
           EXTRA_CONFIG: vendor/extra/ksu.config vendor/extra/droidspaces.config
+          MAKEFLAGS: -k
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
