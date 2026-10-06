@@ -6,7 +6,7 @@ on:
         description: 'Upstream commit/branch. Default = latest master.'
         default: 'master'
       BUILD_VARIANT:
-        description: 'Build variant: all, no-ksu, ksu, ksun, magisk'
+        description: 'Build variant: all, no-ksu, ksu, ksun, ksun-bsxx'
         default: 'all'
 
 permissions:
@@ -61,6 +61,12 @@ jobs:
           CONFIG_UTS_NS=y
           CONFIG_IPC_NS=y
           CONFIG_SYSVIPC=y
+          CONFIG_SECCOMP_FILTER=y
+          CONFIG_USER_NS=y
+          CONFIG_NET_NS=y
+          CONFIG_NF_TABLES=y
+          CONFIG_NF_NAT=y
+          CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
           EOF
 
       - name: Cache toolchain
@@ -92,7 +98,6 @@ jobs:
           sha=$(git -C ksrc rev-parse --short HEAD)
           export CI_ZIPNAME="X00TD-Droidspaces-noKSU-$(date +%Y%m%d-%H%M)-$sha.zip"
           echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
-          echo "KSHA=$sha" >> "$GITHUB_ENV"
           cd ksrc
           bash ../authorci/build.sh
           test -s "$CI_ZIPNAME"
@@ -111,7 +116,7 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          gh release create "X00TD-noKSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-noKSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces (no KSU) - $sha" --notes "Droidspaces kernel WITHOUT KernelSU. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
+          gh release create "X00TD-noKSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-noKSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces (no KSU) - $sha" --notes "Droidspaces kernel WITHOUT KernelSU. Minimal config: PID_NS, UTS_NS, IPC_NS, SYSVIPC, SECCOMP_FILTER, USER_NS, NET_NS, NF_TABLES, NF_NAT, MASQUERADE."
 
   build-ksu:
     if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'ksu'
@@ -164,6 +169,12 @@ jobs:
           CONFIG_UTS_NS=y
           CONFIG_IPC_NS=y
           CONFIG_SYSVIPC=y
+          CONFIG_SECCOMP_FILTER=y
+          CONFIG_USER_NS=y
+          CONFIG_NET_NS=y
+          CONFIG_NF_TABLES=y
+          CONFIG_NF_NAT=y
+          CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
           EOF
 
       - name: Cache toolchain
@@ -214,7 +225,7 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH backslashxx KernelSU. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
+          gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH backslashxx KernelSU. Minimal config: PID_NS, UTS_NS, IPC_NS, SYSVIPC, SECCOMP_FILTER, USER_NS, NET_NS, NF_TABLES, NF_NAT, MASQUERADE."
 
   build-ksun:
     if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'ksun'
@@ -270,6 +281,12 @@ jobs:
           CONFIG_UTS_NS=y
           CONFIG_IPC_NS=y
           CONFIG_SYSVIPC=y
+          CONFIG_SECCOMP_FILTER=y
+          CONFIG_USER_NS=y
+          CONFIG_NET_NS=y
+          CONFIG_NF_TABLES=y
+          CONFIG_NF_NAT=y
+          CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
           EOF
 
       - name: Cache toolchain
@@ -320,10 +337,10 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          gh release create "X00TD-KSUN-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSUN-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU-Next - $sha" --notes "Droidspaces kernel WITH KernelSU-Next. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
+          gh release create "X00TD-KSUN-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSUN-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU-Next - $sha" --notes "Droidspaces kernel WITH KernelSU-Next. Minimal config: PID_NS, UTS_NS, IPC_NS, SYSVIPC, SECCOMP_FILTER, USER_NS, NET_NS, NF_TABLES, NF_NAT, MASQUERADE."
 
-  build-magisk:
-    if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'magisk'
+  build-ksun-bsxx:
+    if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'ksun-bsxx'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -349,15 +366,19 @@ jobs:
           echo "Kernel commit: $(git rev-parse HEAD)"
           test -f arch/arm64/configs/vendor/asus/X00TD_defconfig
 
-      - name: Add Magisk
+      - name: Add KernelSU-Next with backslashxx drivers
         run: |
           set -euo pipefail
           cd ksrc
-          git clone --depth=1 https://github.com/topjohnwu/Magisk.git Magisk
-          cd Magisk
-          ./build.py binary
-          cd ..
-          cp Magisk/out/magiskinit out/magiskinit 2>/dev/null || true
+          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          # Use backslashxx drivers
+          if [ -d "drivers/kernelsu/drivers" ]; then
+            rm -rf drivers/kernelsu/drivers
+            git clone --depth=1 https://github.com/backslashxx/KernelSU-Next-drivers.git drivers/kernelsu/drivers
+          fi
 
       - name: Compatibility fix (data_race)
         run: |
@@ -377,6 +398,12 @@ jobs:
           CONFIG_UTS_NS=y
           CONFIG_IPC_NS=y
           CONFIG_SYSVIPC=y
+          CONFIG_SECCOMP_FILTER=y
+          CONFIG_USER_NS=y
+          CONFIG_NET_NS=y
+          CONFIG_NF_TABLES=y
+          CONFIG_NF_NAT=y
+          CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
           EOF
 
       - name: Cache toolchain
@@ -396,17 +423,17 @@ jobs:
           TG_UPLOAD: "false"
         run: bash authorci/build.sh --fetch-toolchains
 
-      - name: Build kernel (WITH Magisk)
+      - name: Build kernel (WITH KSU-Next + backslashxx drivers)
         env:
           COMP_OPTION: llvm
           TG_UPLOAD: "false"
           KCFLAGS_W: "false"
           DEVICE_TARGET: X00TD
-          EXTRA_CONFIG: vendor/extra/droidspaces.config
+          EXTRA_CONFIG: vendor/extra/ksu.config vendor/extra/droidspaces.config
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          export CI_ZIPNAME="X00TD-Droidspaces-Magisk-$(date +%Y%m%d-%H%M)-$sha.zip"
+          export CI_ZIPNAME="X00TD-Droidspaces-KSUN-BSXX-$(date +%Y%m%d-%H%M)-$sha.zip"
           echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
           echo "KSHA=$sha" >> "$GITHUB_ENV"
           cd ksrc
@@ -414,17 +441,17 @@ jobs:
           test -s "$CI_ZIPNAME"
           test -s out/arch/arm64/boot/Image.gz-dtb
 
-      - name: Upload artifact (WITH Magisk)
+      - name: Upload artifact (WITH KSU-Next + backslashxx drivers)
         uses: actions/upload-artifact@v5
         with:
-          name: X00TD-Droidspaces-Magisk
-          path: ksrc/X00TD-Droidspaces-Magisk-*.zip
+          name: X00TD-Droidspaces-KSUN-BSXX
+          path: ksrc/X00TD-Droidspaces-KSUN-BSXX-*.zip
           retention-days: 30
 
-      - name: Publish release (WITH Magisk)
+      - name: Publish release (WITH KSU-Next + backslashxx drivers)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          gh release create "X00TD-Magisk-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-Magisk-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + Magisk - $sha" --notes "Droidspaces kernel WITH Magisk. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
+          gh release create "X00TD-KSUN-BSXX-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSUN-BSXX-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU-Next + backslashxx drivers - $sha" --notes "Droidspaces kernel WITH KernelSU-Next and backslashxx drivers. Minimal config: PID_NS, UTS_NS, IPC_NS, SYSVIPC, SECCOMP_FILTER, USER_NS, NET_NS, NF_TABLES, NF_NAT, MASQUERADE."
