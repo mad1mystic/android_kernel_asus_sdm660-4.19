@@ -146,7 +146,7 @@ jobs:
           echo "Kernel commit: $(git rev-parse HEAD)"
           test -f arch/arm64/configs/vendor/asus/X00TD_defconfig
 
-      - name: Add KernelSU (author's method)
+      - name: Add KernelSU (backslashxx method)
         run: |
           set -euo pipefail
           cd ksrc
@@ -220,4 +220,4 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH KernelSU. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
+          gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH backslashxx KernelSU. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
