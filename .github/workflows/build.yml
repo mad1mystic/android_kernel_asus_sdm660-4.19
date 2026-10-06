@@ -5,15 +5,9 @@ on:
       KERNEL_REF:
         description: 'Upstream commit/branch. Default = latest master.'
         default: 'master'
-      KSU_URL:
-        description: 'KernelSU setup script'
-        default: 'https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh'
-      KSU_BRANCH:
-        description: 'KernelSU branch'
-        default: 'master'
       BUILD_VARIANT:
-        description: 'Build variant: both, no-ksu, ksu'
-        default: 'both'
+        description: 'Build variant: all, no-ksu, ksu, ksun, magisk'
+        default: 'all'
 
 permissions:
   contents: write
@@ -23,7 +17,7 @@ env:
 
 jobs:
   build-no-ksu:
-    if: inputs.BUILD_VARIANT == 'both' || inputs.BUILD_VARIANT == 'no-ksu'
+    if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'no-ksu'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -60,7 +54,7 @@ jobs:
             cp /tmp/compiler.h.new "$H"
           fi
 
-      - name: Write Droidspaces config fragment (minimal - only 3 essential + dependency)
+      - name: Write Droidspaces config fragment
         run: |
           cat > ksrc/arch/arm64/configs/vendor/extra/droidspaces.config <<'EOF'
           CONFIG_PID_NS=y
@@ -120,7 +114,7 @@ jobs:
           gh release create "X00TD-noKSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-noKSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces (no KSU) - $sha" --notes "Droidspaces kernel WITHOUT KernelSU. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
 
   build-ksu:
-    if: inputs.BUILD_VARIANT == 'both' || inputs.BUILD_VARIANT == 'ksu'
+    if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'ksu'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -150,7 +144,7 @@ jobs:
         run: |
           set -euo pipefail
           cd ksrc
-          curl -LSs "${{ inputs.KSU_URL }}" | bash -s "${{ inputs.KSU_BRANCH }}"
+          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -s master
 
       - name: Compatibility fix (data_race)
         run: |
@@ -163,7 +157,7 @@ jobs:
             cp /tmp/compiler.h.new "$H"
           fi
 
-      - name: Write Droidspaces config fragment (minimal - only 3 essential + dependency)
+      - name: Write Droidspaces config fragment
         run: |
           cat > ksrc/arch/arm64/configs/vendor/extra/droidspaces.config <<'EOF'
           CONFIG_PID_NS=y
@@ -221,3 +215,216 @@ jobs:
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
           gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH backslashxx KernelSU. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
+
+  build-ksun:
+    if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'ksun'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout this repo (reference files only)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: reference
+
+      - name: Checkout author's build scripts
+        uses: actions/checkout@v5
+        with:
+          repository: rsuntk/asus_kernel_action
+          path: authorci
+
+      - name: Fetch kernel source
+        run: |
+          set -euo pipefail
+          mkdir ksrc && cd ksrc
+          git init -q
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "${{ inputs.KERNEL_REF }}"
+          git checkout -q FETCH_HEAD
+          echo "Kernel commit: $(git rev-parse HEAD)"
+          test -f arch/arm64/configs/vendor/asus/X00TD_defconfig
+
+      - name: Add KernelSU-Next
+        run: |
+          set -euo pipefail
+          cd ksrc
+          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q drivers/kernelsu/Kconfig drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+      - name: Compatibility fix (data_race)
+        run: |
+          set -euo pipefail
+          cd ksrc
+          if grep -q 'data_race' mm/page_counter.c && ! grep -rqE '^[[:space:]]*#[[:space:]]*define[[:space:]]*data_race' include/; then
+            H=include/linux/compiler.h
+            n=$(grep -n '^#endif.*__LINUX_COMPILER_H' "$H" | tail -n 1 | cut -d: -f1)
+            awk -v n="$n" 'NR==n{print "#ifndef data_race"; print "#define data_race(expr) ({ typeof(expr) __v = (expr); __v; })"; print "#endif"} {print}' "$H" > /tmp/compiler.h.new
+            cp /tmp/compiler.h.new "$H"
+          fi
+
+      - name: Write Droidspaces config fragment
+        run: |
+          cat > ksrc/arch/arm64/configs/vendor/extra/droidspaces.config <<'EOF'
+          CONFIG_PID_NS=y
+          CONFIG_UTS_NS=y
+          CONFIG_IPC_NS=y
+          CONFIG_SYSVIPC=y
+          EOF
+
+      - name: Cache toolchain
+        id: tc
+        uses: actions/cache@v5
+        with:
+          path: ~/neutron-clang
+          key: neutron-clang-06092026
+
+      - name: Install deps
+        run: bash authorci/build.sh --setup-deps
+
+      - name: Fetch toolchain
+        if: steps.tc.outputs.cache-hit != 'true'
+        env:
+          COMP_OPTION: llvm
+          TG_UPLOAD: "false"
+        run: bash authorci/build.sh --fetch-toolchains
+
+      - name: Build kernel (WITH KSU-Next)
+        env:
+          COMP_OPTION: llvm
+          TG_UPLOAD: "false"
+          KCFLAGS_W: "false"
+          DEVICE_TARGET: X00TD
+          EXTRA_CONFIG: vendor/extra/ksu.config vendor/extra/droidspaces.config
+        run: |
+          set -euo pipefail
+          sha=$(git -C ksrc rev-parse --short HEAD)
+          export CI_ZIPNAME="X00TD-Droidspaces-KSUN-$(date +%Y%m%d-%H%M)-$sha.zip"
+          echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
+          echo "KSHA=$sha" >> "$GITHUB_ENV"
+          cd ksrc
+          bash ../authorci/build.sh
+          test -s "$CI_ZIPNAME"
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+      - name: Upload artifact (WITH KSU-Next)
+        uses: actions/upload-artifact@v5
+        with:
+          name: X00TD-Droidspaces-KSUN
+          path: ksrc/X00TD-Droidspaces-KSUN-*.zip
+          retention-days: 30
+
+      - name: Publish release (WITH KSU-Next)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(git -C ksrc rev-parse --short HEAD)
+          gh release create "X00TD-KSUN-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSUN-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU-Next - $sha" --notes "Droidspaces kernel WITH KernelSU-Next. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
+
+  build-magisk:
+    if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'magisk'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout this repo (reference files only)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: reference
+
+      - name: Checkout author's build scripts
+        uses: actions/checkout@v5
+        with:
+          repository: rsuntk/asus_kernel_action
+          path: authorci
+
+      - name: Fetch kernel source
+        run: |
+          set -euo pipefail
+          mkdir ksrc && cd ksrc
+          git init -q
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "${{ inputs.KERNEL_REF }}"
+          git checkout -q FETCH_HEAD
+          echo "Kernel commit: $(git rev-parse HEAD)"
+          test -f arch/arm64/configs/vendor/asus/X00TD_defconfig
+
+      - name: Add Magisk
+        run: |
+          set -euo pipefail
+          cd ksrc
+          git clone --depth=1 https://github.com/topjohnwu/Magisk.git Magisk
+          cd Magisk
+          ./build.py binary
+          cd ..
+          cp Magisk/out/magiskinit out/magiskinit 2>/dev/null || true
+
+      - name: Compatibility fix (data_race)
+        run: |
+          set -euo pipefail
+          cd ksrc
+          if grep -q 'data_race' mm/page_counter.c && ! grep -rqE '^[[:space:]]*#[[:space:]]*define[[:space:]]*data_race' include/; then
+            H=include/linux/compiler.h
+            n=$(grep -n '^#endif.*__LINUX_COMPILER_H' "$H" | tail -n 1 | cut -d: -f1)
+            awk -v n="$n" 'NR==n{print "#ifndef data_race"; print "#define data_race(expr) ({ typeof(expr) __v = (expr); __v; })"; print "#endif"} {print}' "$H" > /tmp/compiler.h.new
+            cp /tmp/compiler.h.new "$H"
+          fi
+
+      - name: Write Droidspaces config fragment
+        run: |
+          cat > ksrc/arch/arm64/configs/vendor/extra/droidspaces.config <<'EOF'
+          CONFIG_PID_NS=y
+          CONFIG_UTS_NS=y
+          CONFIG_IPC_NS=y
+          CONFIG_SYSVIPC=y
+          EOF
+
+      - name: Cache toolchain
+        id: tc
+        uses: actions/cache@v5
+        with:
+          path: ~/neutron-clang
+          key: neutron-clang-06092026
+
+      - name: Install deps
+        run: bash authorci/build.sh --setup-deps
+
+      - name: Fetch toolchain
+        if: steps.tc.outputs.cache-hit != 'true'
+        env:
+          COMP_OPTION: llvm
+          TG_UPLOAD: "false"
+        run: bash authorci/build.sh --fetch-toolchains
+
+      - name: Build kernel (WITH Magisk)
+        env:
+          COMP_OPTION: llvm
+          TG_UPLOAD: "false"
+          KCFLAGS_W: "false"
+          DEVICE_TARGET: X00TD
+          EXTRA_CONFIG: vendor/extra/droidspaces.config
+        run: |
+          set -euo pipefail
+          sha=$(git -C ksrc rev-parse --short HEAD)
+          export CI_ZIPNAME="X00TD-Droidspaces-Magisk-$(date +%Y%m%d-%H%M)-$sha.zip"
+          echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
+          echo "KSHA=$sha" >> "$GITHUB_ENV"
+          cd ksrc
+          bash ../authorci/build.sh
+          test -s "$CI_ZIPNAME"
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+      - name: Upload artifact (WITH Magisk)
+        uses: actions/upload-artifact@v5
+        with:
+          name: X00TD-Droidspaces-Magisk
+          path: ksrc/X00TD-Droidspaces-Magisk-*.zip
+          retention-days: 30
+
+      - name: Publish release (WITH Magisk)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(git -C ksrc rev-parse --short HEAD)
+          gh release create "X00TD-Magisk-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-Magisk-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + Magisk - $sha" --notes "Droidspaces kernel WITH Magisk. Minimal config: only PID_NS, UTS_NS, IPC_NS, SYSVIPC enabled. Everything else original to rsuntk."
