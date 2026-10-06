@@ -100,6 +100,13 @@ static struct elevator_type *elevator_find(const char *name, bool mq)
 {
 	struct elevator_type *e;
 
+	/* Forbid init from changing I/O scheduler by default */
+	if (!strncmp(current->comm, "init", sizeof("init"))) {
+		pr_info_once("%s: forbid init from changing default iosched!\n",
+			__func__);
+		return NULL;
+	}
+
 	list_for_each_entry(e, &elv_list, list) {
 		if (elevator_match(e, name) && (mq == e->uses_mq))
 			return e;
@@ -389,6 +396,9 @@ enum elv_merge elv_merge(struct request_queue *q, struct request **req,
 	__rq = elv_rqhash_find(q, bio->bi_iter.bi_sector);
 	if (__rq && elv_bio_merge_ok(__rq, bio)) {
 		*req = __rq;
+
+		if (blk_discard_mergable(__rq))
+			return ELEVATOR_DISCARD_MERGE;
 		return ELEVATOR_BACK_MERGE;
 	}
 
@@ -922,9 +932,16 @@ int elevator_init_mq(struct request_queue *q)
 	if (unlikely(q->elevator))
 		goto out;
 
-	e = elevator_get(q, CONFIG_BLOCK_DEFAULT_IOSCHED, false);
+	if (IS_ENABLED(CONFIG_BFQ_DEFAULT)) {
+		e = elevator_get(q, "bfq", false);
+	} else if (IS_ENABLED(CONFIG_MQ_KYBER_DEFAULT)) {
+		e = elevator_get(q, "kyber", false);
+	} else
+		e = elevator_get(q, "mq-deadline", false);
+
 	if (!e)
 		goto out;
+
 	err = blk_mq_init_sched(q, e);
 	if (err)
 		elevator_put(e);
