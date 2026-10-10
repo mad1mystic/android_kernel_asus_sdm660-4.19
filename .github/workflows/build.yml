@@ -5,9 +5,6 @@ on:
       KERNEL_REF:
         description: 'Upstream commit/branch. Default = latest master.'
         default: 'master'
-      BUILD_VARIANT:
-        description: 'Build variant: all, no-ksu, ksu'
-        default: 'all'
 
 permissions:
   contents: write
@@ -16,119 +13,7 @@ env:
   KERNEL_REPO: https://github.com/rsuntk/android_kernel_asus_sdm660-4.19
 
 jobs:
-  build-no-ksu:
-    if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'no-ksu'
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout this repo (reference files only)
-        uses: actions/checkout@v5
-        with:
-          sparse-checkout: reference
-
-      - name: Checkout author's build scripts
-        uses: actions/checkout@v5
-        with:
-          repository: rsuntk/asus_kernel_action
-          path: authorci
-
-      - name: Fetch kernel source
-        run: |
-          set -euo pipefail
-          mkdir ksrc && cd ksrc
-          git init -q
-          git remote add origin "$KERNEL_REPO"
-          git fetch --depth=1 origin "${{ inputs.KERNEL_REF }}"
-          git checkout -q FETCH_HEAD
-          echo "Kernel commit: $(git rev-parse HEAD)"
-          test -f arch/arm64/configs/vendor/asus/X00TD_defconfig
-
-      - name: Compatibility fix (data_race)
-        run: |
-          set -euo pipefail
-          cd ksrc
-          if grep -q 'data_race' mm/page_counter.c && ! grep -rqE '^[[:space:]]*#[[:space:]]*define[[:space:]]*data_race' include/; then
-            H=include/linux/compiler.h
-            n=$(grep -n '^#endif.*__LINUX_COMPILER_H' "$H" | tail -n 1 | cut -d: -f1)
-            awk -v n="$n" 'NR==n{print "#ifndef data_race"; print "#define data_race(expr) ({ typeof(expr) __v = (expr); __v; })"; print "#endif"} {print}' "$H" > /tmp/compiler.h.new
-            cp /tmp/compiler.h.new "$H"
-          fi
-
-      - name: Write Droidspaces config fragment (minimal + seccomp disabled)
-        run: |
-          cat > ksrc/arch/arm64/configs/vendor/extra/droidspaces.config <<'EOF'
-          CONFIG_PID_NS=y
-          CONFIG_UTS_NS=y
-          CONFIG_IPC_NS=y
-          CONFIG_SECCOMP=n
-          CONFIG_SECCOMP_FILTER=n
-          EOF
-
-      - name: Apply SELinux policy patch
-        run: |
-          cat > ksrc/selinux_droidspaces.patch <<'EOF'
-          --- a/security/selinux/ss/services.c
-          +++ b/security/selinux/ss/services.c
-          @@ -1234,6 +1234,12 @@ static int compute_sid(struct selinux_state *state,
-                return rc;
-            }
-            
-          +    /* Allow Droidspaces container operations */
-          +    if (sid == SECINITSID_KERNEL && tclass == TCLASS_FILE) {
-          +        *out_sid = SECINITSID_UNLABELED;
-          +        return 0;
-          +    }
-          +
-            /* Look up the SID in the policy. */
-            rc = policydb_lookup_sid(policydb, sid, out_sid);
-            return rc;
-          }
-          EOF
-          cd ksrc && patch -p1 < selinux_droidspaces.patch || echo "SELinux patch may need manual adjustment"
-
-      - name: Cache toolchain
-        id: tc
-        uses: actions/cache@v5
-        with:
-          path: ~/neutron-clang
-          key: neutron-clang-06092026
-
-      - name: Install deps
-        run: bash authorci/build.sh --setup-deps
-
-      - name: Fetch toolchain
-        if: steps.tc.outputs.cache-hit != 'true'
-        env:
-          COMP_OPTION: llvm
-          TG_UPLOAD: "false"
-        run: bash authorci/build.sh --fetch-toolchains
-
-      - name: Build kernel (NO KSU)
-        env:
-          COMP_OPTION: llvm
-          TG_UPLOAD: "false"
-          KCFLAGS_W: "false"
-          DEVICE_TARGET: X00TD
-          EXTRA_CONFIG: vendor/extra/droidspaces.config
-        run: |
-          set -euo pipefail
-          sha=$(git -C ksrc rev-parse --short HEAD)
-          export CI_ZIPNAME="X00TD-Droidspaces-noKSU-$(date +%Y%m%d-%H%M)-$sha.zip"
-          echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
-          cd ksrc
-          bash ../authorci/build.sh
-          test -s "$CI_ZIPNAME"
-          test -s out/arch/arm64/boot/Image.gz-dtb
-
-      - name: Upload artifact (NO KSU)
-        uses: actions/upload-artifact@v5
-        with:
-          name: X00TD-Droidspaces-noKSU
-          path: ksrc/X00TD-Droidspaces-noKSU-*.zip
-          retention-days: 30
-
   build-ksu:
-    if: inputs.BUILD_VARIANT == 'all' || inputs.BUILD_VARIANT == 'ksu'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -167,41 +52,20 @@ jobs:
           if grep -q 'data_race' mm/page_counter.c && ! grep -rqE '^[[:space:]]*#[[:space:]]*define[[:space:]]*data_race' include/; then
             H=include/linux/compiler.h
             n=$(grep -n '^#endif.*__LINUX_COMPILER_H' "$H" | tail -n 1 | cut -d: -f1)
-            awk -v n="$n" 'NR==n{print "#ifndef data_race"; print "#define data_race(expr) ({ typeof(expr) __v = (expr); __v; })"; print "#end"} {print}' "$H" > /tmp/compiler.h.new
+            awk -v n="$n" 'NR==n{print "#ifndef data_race"; print "#define data_race(expr) ({ typeof(expr) __v = (expr); __v; })"; print "#endif"} {print}' "$H" > /tmp/compiler.h.new
             cp /tmp/compiler.h.new "$H"
           fi
 
-      - name: Write Droidspaces config fragment (minimal + seccomp disabled)
+      - name: Write Droidspaces config fragment (minimal - only 3 essential + dependency)
         run: |
           cat > ksrc/arch/arm64/configs/vendor/extra/droidspaces.config <<'EOF'
           CONFIG_PID_NS=y
           CONFIG_UTS_NS=y
           CONFIG_IPC_NS=y
+          CONFIG_SYSVIPC=y
           CONFIG_SECCOMP=n
           CONFIG_SECCOMP_FILTER=n
           EOF
-
-      - name: Apply SELinux policy patch
-        run: |
-          cat > ksrc/selinux_droidspaces.patch <<'EOF'
-          --- a/security/selinux/ss/services.c
-          +++ b/security/selinux/ss/services.c
-          @@ -1234,6 +1234,12 @@ static int compute_sid(struct selinux_state *state,
-                return rc;
-            }
-            
-          +    /* Allow Droidspaces container operations */
-          +    if (sid == SECINITSID_KERNEL && tclass == TCLASS_FILE) {
-          +        *out_sid = SECINITSID_UNLABELED;
-          +        return 0;
-          +    }
-          +
-            /* Look up the SID in the policy. */
-            rc = policydb_lookup_sid(policydb, sid, out_sid);
-            return rc;
-          }
-          EOF
-          cd ksrc && patch -p1 < selinux_droidspaces.patch || echo "SELinux patch may need manual adjustment"
 
       - name: Cache toolchain
         id: tc
@@ -232,6 +96,7 @@ jobs:
           sha=$(git -C ksrc rev-parse --short HEAD)
           export CI_ZIPNAME="X00TD-Droidspaces-KSU-$(date +%Y%m%d-%H%M)-$sha.zip"
           echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
+          echo "KSHA=$sha" >> "$GITHUB_ENV"
           cd ksrc
           bash ../authorci/build.sh
           test -s "$CI_ZIPNAME"
@@ -250,4 +115,4 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH backslashxx KernelSU. Minimal config: PID_NS, UTS_NS, IPC_NS, SECCOMP disabled."
+          gh release create "X00TD-KSU-$(date +%Y%m%d-%H%M)-$sha" "ksrc/X00TD-Droidspaces-KSU-*.zip" --repo "$GITHUB_REPOSITORY" --prerelease --title "X00TD Droidspaces + KSU - $sha" --notes "Droidspaces kernel WITH backslashxx KernelSU. Minimal config: PID_NS, UTS_NS, IPC_NS, SYSVIPC, SECCOMP disabled."
