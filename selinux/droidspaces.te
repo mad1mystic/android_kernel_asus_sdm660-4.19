@@ -1,0 +1,22 @@
+# SELinux policy for Droidspaces container support
+# Allow KernelSU and Droidspaces to function properly
+
+# Allow KernelSU daemon to manage processes
+allow kernelsu self:process { setsched signal };
+allow kernelsu self:capability { sys_admin sys_resource };
+
+# Allow Droidspaces container operations
+allow droidspaces self:process { setsched signal };
+allow droidspaces self:capability { sys_admin sys_resource };
+
+# Allow container file access
+allow droidspaces container_file:dir { read write search add_file remove_file };
+allow droidspaces container_file:file { read write create unlink };
+
+# Allow namespace operations
+allow droidspaces self:ns { mount unmount };
+
+# Allow network operations for containers
+allow droidspaces self:netlink_socket { create bind read write };
+allow droidspaces self:tcp_socket { create bind listen accept read write };
+allow droidspaces self:udp_socket { create bind read write };
