@@ -11,7 +11,7 @@ Version string: `4.19.325-RSKSevenProject`
 - **KernelSU-Next v3.2.0-legacy (33129)** — built into the kernel, manual hook (no LKM/module loading needed)
 - **SuSFS v2.3.0** — SUS_PATH / SUS_MOUNT / SUS_KSTAT, verified on-device (`ksud susfs support` → `Supported`)
 - KernelSU module services auto-start correctly at boot, **including on Android 17** (this line carries a fix for the changed way Android 17 init reads `init.rc`)
-- GPU untouched — stock power levels, max 585 MHz (actual frequency follows the speed bin of your unit)
+- GPU untouched — stock KGSL power-level tables (per-unit sets, the highest peaking at 750 MHz); the effective GPU ceiling follows the efuse speed bin of the unit at boot — the maintainer reference unit (efuse bin 90) runs 430 MHz. An OC test build forcing the GPU to an effective 585 MHz is in preparation
 
 ## Tested
 
@@ -26,7 +26,7 @@ Version string: `4.19.325-RSKSevenProject`
 
 ## ⚠️ Overclock warning
 
-The 2.2 GHz clock depends on the silicon speed bin of your individual unit. Every unit has its own ceiling — weaker units may freeze or fail to boot with this build. A **stock 1.8 GHz variant is in preparation** as the safe fallback; if this build misbehaves on your unit, wait for that one.
+The 2.2 GHz clock depends on the silicon speed bin of your individual unit. Every unit has its own ceiling — weaker units may freeze or fail to boot with this build. A **stock 1.8 GHz variant** (natural CPU and GPU bins) is in preparation as the safe fallback; if this build misbehaves on your unit, wait for that one.
 
 ## Special Thanks
 
