@@ -87,7 +87,14 @@ ccflags-y += -DKSU_VERSION=$(KSU_VERSION)
 else
 # If there is no .git directory, use default version
 $(warning "KSU_GIT_VERSION not defined! It is better to make KernelSU-Next a git repository!")
-KSU_VERSION_FALLBACK := 1
+# This vendored copy lives INSIDE the kernel tree, so the git detection above
+# never fires (it only trusts a checkout that is a separate repo from the
+# kernel) and the upstream placeholder 1 would be reported instead of a real
+# version. Pin KernelSU-Next v3.2.0-legacy:
+#   30000 + 150 (this branch's offset) + 2979 (commit count of the tag) = 33129
+# NOTE: 33129 predates the manager's kernel-uapi field, so it must be paired
+# with the matching legacy manager; current managers require >= 33188.
+KSU_VERSION_FALLBACK := 33129
 $(info -- KernelSU-Next version fallback: $(KSU_VERSION_FALLBACK))
 ccflags-y += -DKSU_VERSION=$(KSU_VERSION_FALLBACK)
 endif
@@ -98,7 +105,7 @@ $(info -- KernelSU-Next tag: $(KSU_VERSION_TAG))
 ccflags-y += -DKSU_VERSION_TAG=\"$(KSU_VERSION_TAG)\"
 else
 $(warning "KSU_VERSION_TAG not defined! It is better to make KernelSU-Next a git submodule!")
-KSU_VERSION_TAG_FALLBACK := v0.0.1
+KSU_VERSION_TAG_FALLBACK := v3.2.0-legacy
 $(info -- KernelSU-Next tag fallback: $(KSU_VERSION_TAG_FALLBACK))
 ccflags-y += -DKSU_VERSION_TAG=\"$(KSU_VERSION_TAG_FALLBACK)\"
 endif
