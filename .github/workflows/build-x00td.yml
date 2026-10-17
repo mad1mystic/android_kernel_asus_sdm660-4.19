@@ -1,14 +1,16 @@
-name: Build X00TD Droidspaces Kernel
+name: Build X00TD Mystic Kernel
 
 # NOTE: this file intentionally uses the SAME path as master's
 # .github/workflows/build-x00td.yml. GitHub keys workflow_dispatch on the path,
 # so the "Run workflow" button stays available and you can pick this branch
 # (rskseven-droidspaces) as the ref — master is left untouched.
 #
-# Base:  rusakseven/RSKSevenProject-X00TD-419 @ rskseven-4.19
+# Kernel: Mystic Kernel for ASUS ZenFone Max Pro M1 (X00TD)
+# Base:   rusakseven/RSKSevenProject-X00TD-419 @ rskseven-4.19
 #         4.19.325 + OC 2.2 GHz (big cluster) + KernelSU-Next v3.2.0-legacy
-#         + SuSFS v2.3.0, EAS + schedutil, GPU locked 430 MHz
-# Plus:  Droidspaces support (ravindu644/Droidspaces-OSS, non-GKI path)
+#         + SuSFS v2.3.0, EAS, GPU locked 430 MHz
+# Plus:   Droidspaces support (ravindu644/Droidspaces-OSS, non-GKI path)
+#         + schedutil as the compiled-in default governor (battery)
 on:
   workflow_dispatch:
     inputs:
@@ -82,14 +84,27 @@ jobs:
             elif patch -R -p1 --dry-run -s < "$p" >/dev/null 2>&1; then
               echo "already applied, skipping"
             else
-              echo "::warning::Patch does not apply, skipped: $n"
-              echo "- $n" >> "$RUNNER_TEMP/skipped.txt"
+              # Distinguish "this tree doesn't have that feature" (safe to skip)
+              # from "the hunk really failed to apply" (NOT safe to skip).
+              tgts=$(grep -E '^(---|\+\+\+) ' "$p" \
+                | sed -E 's#^(---|\+\+\+) ##; s#^[ab]/##; s#[[:space:]].*$##' \
+                | grep -vE '^(/dev/null)?$' | sort -u || true)
+              miss=0
               echo "   files this patch touches:"
-              grep -E '^\+\+\+ ' "$p" | sed -E 's#^\+\+\+ [ab]/##; s#[[:space:]].*$##' | while read -r f; do
-                if [ -f "$f" ]; then echo "     exists : $f"; else echo "     MISSING: $f"; fi
-              done
+              while read -r f; do
+                [ -n "$f" ] || continue
+                if [ -f "$f" ]; then echo "     exists : $f"; else echo "     MISSING: $f"; miss=$((miss+1)); fi
+              done <<< "$tgts"
               echo "   dry-run output:"
-              patch -p1 --dry-run < "$p" 2>&1 | head -n 8 | sed 's/^/     /' || true
+              patch -p1 --dry-run < "$p" 2>&1 | head -n 10 | sed 's/^/     /' || true
+              if [ "$miss" != 0 ]; then
+                echo "::warning::Skipped $n — this tree has no target file for it"
+                echo "- $n (target files absent from this tree)" >> "$RUNNER_TEMP/skipped.txt"
+              else
+                echo "::error::Droidspaces patch failed to apply: $n"
+                echo "::error::All of its target files exist, so the hunk genuinely did not apply."
+                exit 1
+              fi
             fi
           done
           [ "$found" = 1 ] || { echo "::error::no Droidspaces patches found"; exit 1; }
@@ -156,7 +171,7 @@ jobs:
             IPV6 IPV6_MULTIPLE_TABLES IP6_NF_IPTABLES IP6_NF_FILTER IP6_NF_MANGLE \
             IP6_NF_NAT IP6_NF_TARGET_MASQUERADE NF_NAT_IPV6 \
             MACVLAN FUSE_FS TUN BLK_DEV_LOOP EXT4_FS \
-            KSU KPROBES KSU_SUSFS ; do
+            KSU KPROBES KSU_SUSFS CPU_FREQ_DEFAULT_GOV_SCHEDUTIL ; do
             if ! grep -qx "CONFIG_$s=y" out/.config; then echo "::error::MISSING required CONFIG_$s"; bad=1; fi
           done
 
@@ -167,7 +182,11 @@ jobs:
           grep -E '^CONFIG_SECCOMP' out/.config
 
           echo "--- identity ---"
-          grep -E '^CONFIG_LOCALVERSION' out/.config
+          grep -E '^CONFIG_LOCALVERSION|^CONFIG_CPU_FREQ_DEFAULT_GOV' out/.config
+          if ! grep -qx 'CONFIG_LOCALVERSION="-MysticKernel"' out/.config; then
+            echo "::error::LOCALVERSION is not -MysticKernel"; bad=1; fi
+          if ! grep -qx 'CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y' out/.config; then
+            echo "::error::default governor is not schedutil (Kconfig fell back to performance)"; bad=1; fi
 
           echo "--- optional options that did not stick (informational) ---"
           grep -E '^CONFIG_.*=y$' arch/arm64/configs/vendor/extra/droidspaces.config | while read -r l; do
@@ -197,14 +216,32 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
-          export CI_ZIPNAME="X00TD-RSKSeven-Droidspaces-$(date +%Y%m%d-%H%M)-$sha.zip"
+          export CI_ZIPNAME="X00TD-MysticKernel-$(date +%Y%m%d-%H%M)-$sha.zip"
           echo "ZIPNAME=$CI_ZIPNAME" >> "$GITHUB_ENV"
           echo "KSHA=$sha" >> "$GITHUB_ENV"
+          LOG="$GITHUB_WORKSPACE/build.log"
           cd ksrc
-          bash ../authorci/build.sh
+          # MAKEFLAGS=-k keeps make going after an error, which is good for the
+          # log but means a non-zero exit alone is not a reliable signal, and a
+          # partial build can still link an Image.gz-dtb. So the captured log is
+          # also scanned for compiler diagnostics and the run is aborted on any.
+          set +e
+          bash ../authorci/build.sh 2>&1 | tee "$LOG"
+          rc=${PIPESTATUS[0]}
+          set -e
+          errs=$(grep -cE ': error:' "$LOG" || true)
+          echo "build.sh exit code: $rc"
+          echo "compiler 'error:' lines: $errs"
+          if [ "$rc" != 0 ] || [ "$errs" != 0 ]; then
+            echo "::error::build failed (exit=$rc, compiler errors=$errs)"
+            grep -nE ': error:' "$LOG" | head -n 40 || true
+            tail -n 40 "$LOG" || true
+            exit 1
+          fi
           test -s "$CI_ZIPNAME"
           unzip -l "$CI_ZIPNAME" | grep -E 'Image.gz-dtb|anykernel.sh'
           test -s out/arch/arm64/boot/Image.gz-dtb
+          echo "OK: $CI_ZIPNAME"
 
       - name: Publish release
         env:
@@ -212,17 +249,41 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "Base: rusakseven/RSKSevenProject-X00TD-419 (rskseven-4.19)"
-            echo "Built from: $(git -C ksrc rev-parse HEAD)"
-            echo "Variant: OC (big cluster 2.20 GHz), KernelSU-Next v3.2.0-legacy, SuSFS v2.3.0"
-            echo "Droidspaces: full non-GKI config set + UFW/NAT66/macvlan extras"
+            echo "## Mystic Kernel — X00TD (ASUS ZenFone Max Pro M1)"
             echo
-            echo "Flash in OrangeFox. Keep a boot.img backup and restore it if it fails to boot."
-            if [ -s "$RUNNER_TEMP/skipped.txt" ]; then echo; echo "Droidspaces patches NOT applied:"; cat "$RUNNER_TEMP/skipped.txt"; fi
+            echo '`uname -r` should read `4.19.325-MysticKernel-'"$KSHA"'`'
+            echo
+            echo "Built from: $(git -C ksrc rev-parse HEAD)"
+            echo
+            echo "| Component | Version |"
+            echo "| --- | --- |"
+            echo "| Base | rusakseven/RSKSevenProject-X00TD-419 (rskseven-4.19) |"
+            echo "| Linux | 4.19.325 |"
+            echo "| Big cluster | 2.20 GHz (OC) |"
+            echo "| Little cluster | 1.84 GHz (stock) |"
+            echo "| EAS default governor | schedutil |"
+            echo "| GPU | locked 430 MHz |"
+            echo "| Root | KernelSU-Next v3.2.0-legacy |"
+            echo "| SUSFS | v2.3.0 |"
+            echo "| Containers | Droidspaces (full non-GKI config set) |"
+            echo
+            echo "### Flashing"
+            echo "Flash the zip in OrangeFox. Back up your current boot.img first"
+            echo "(OrangeFox -> Backup -> Boot) so you can restore it if anything misbehaves."
+            echo
+            echo "### Notes"
+            echo "- KernelSU-Next needs its matching manager app (not the old KernelSU APK)."
+            echo "- SuSFS/NoMount are separate metamodules; install versions built for KernelSU-Next v3.2.0."
+            echo "- The OC speedbin override is a no-op on units whose efuse already selects the 2.2 GHz LUT."
+            if [ -s "$RUNNER_TEMP/skipped.txt" ]; then
+              echo
+              echo "### Droidspaces patches skipped"
+              cat "$RUNNER_TEMP/skipped.txt"
+            fi
           } > "$RUNNER_TEMP/notes.md"
-          gh release create "X00TD-RSKSeven-Droidspaces-$(date +%Y%m%d-%H%M)-$KSHA" \
-            "ksrc/$ZIPNAME" --repo "$GITHUB_REPOSITORY" --prerelease \
-            --title "$ZIPNAME" --notes-file "$RUNNER_TEMP/notes.md"
+          gh release create "X00TD-MysticKernel-$(date +%Y%m%d-%H%M)-$KSHA" \
+            "ksrc/$ZIPNAME" --repo "$GITHUB_REPOSITORY" \
+            --title "Mystic Kernel — X00TD — $ZIPNAME" --notes-file "$RUNNER_TEMP/notes.md"
 
       - name: Upload debug files
         if: always()
@@ -233,4 +294,5 @@ jobs:
           path: |
             ksrc/out/.config
             ksrc/out/compilation.log
+            build.log
           retention-days: 7
