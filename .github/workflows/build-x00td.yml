@@ -3,7 +3,7 @@ name: Build X00TD Mystic Kernel
 # NOTE: this file intentionally uses the SAME path as master's
 # .github/workflows/build-x00td.yml. GitHub keys workflow_dispatch on the path,
 # so the "Run workflow" button stays available and you can pick this branch
-# (rskseven-droidspaces) as the ref — master is left untouched.
+# (mystic-ksu334) as the ref — master is left untouched.
 #
 # Kernel: Mystic Kernel for ASUS ZenFone Max Pro M1 (X00TD)
 # Base:   rusakseven/RSKSevenProject-X00TD-419 @ rskseven-4.19
@@ -11,12 +11,24 @@ name: Build X00TD Mystic Kernel
 #         + SuSFS v2.3.0, EAS, GPU locked 430 MHz
 # Plus:   Droidspaces support (ravindu644/Droidspaces-OSS, non-GKI path)
 #         + schedutil as the compiled-in default governor (battery)
+#         + KernelSU-Next "legacy" HEAD 465490a26 (KSU 33314) with the RSKSeven
+#           SuSFS v2.3.0 integration re-ported on top  [v1.3 feature parity]
+#
+# WHY KSU_VERSION IS PINNED BELOW:
+#   The KSU source is vendored inside this kernel tree (KernelSU-Next-v340/kernel,
+#   reached via the drivers/kernelsu symlink). Kbuild only trusts a git checkout
+#   that is a *different* repo from the kernel; here it is the same repo, so the
+#   autodetection falls through to KSU_VERSION_FALLBACK=1. The KernelSU-Next
+#   manager enforces MINIMAL_SUPPORTED_KERNEL=33188 and would treat such a kernel
+#   as unsupported (root dead on arrival). So the real version is pinned with
+#   KSU_VERSION_OVERRIDE and verified after the build:
+#       30000 + 289 (legacy offset) + 3025 (commit count of 465490a26) = 33314
 on:
   workflow_dispatch:
     inputs:
       KERNEL_REF:
         description: 'Kernel ref to build (branch or commit in this repo)'
-        default: 'rskseven-droidspaces'
+        default: 'mystic-ksu334'
       DS_PATCHES:
         description: 'Apply the Droidspaces non-GKI kernel patches'
         type: boolean
@@ -62,9 +74,10 @@ jobs:
           grep -n 'RSKSevenProject OC' drivers/clk/qcom/clk-cpu-osm-660.c || {
             echo "::error::OC speedbin marker missing — this is not the OC tree"; exit 1; }
 
-      # KernelSU-Next v3.2.0-legacy ships in-tree (drivers/kernelsu, CONFIG_KSU=y
-      # in vendor/extra/ksu.config). There is deliberately NO setup.sh step here:
-      # it would write to drivers/kernelsu and collide with the vendored copy.
+      # KernelSU-Next ships in-tree as a real directory (KernelSU-Next-v340/kernel)
+      # reached through the drivers/kernelsu symlink, with CONFIG_KSU=y in
+      # vendor/extra/ksu.config. There is deliberately NO setup.sh step here: it
+      # would write into drivers/kernelsu and collide with the vendored copy.
 
       - name: Apply Droidspaces non-GKI patches
         if: ${{ inputs.DS_PATCHES }}
@@ -191,12 +204,14 @@ jobs:
           # drivers/kernelsu/Kconfig sets KSU_MANUAL_HOOK=y whenever KPROBES is
           # absent (this tree's defconfig never enables KPROBES, and neither does
           # the known-good kernel currently running on the device), while
-          # KSU_KPROBES_HOOK=y is the kretprobe path used on 5.10+. Exactly one
-          # of the two must be on, or KernelSU has no way to hook syscalls.
+          # KSU_KPROBES_HOOK=y is the kretprobe path used on 5.10+ and
+          # KSU_SYSCALL_TABLE_HOOK=y (KSU-Next legacy HEAD only) patches
+          # sys_call_table for non-GKI kernels. Exactly one must be on, or
+          # KernelSU has no way to hook syscalls.
           echo "--- KSU hook mechanism ---"
-          grep -E '^CONFIG_(KSU_MANUAL_HOOK|KSU_KPROBES_HOOK|KPROBES|KRETPROBES)' out/.config
-          if ! grep -qxE 'CONFIG_KSU_(MANUAL_HOOK|KPROBES_HOOK)=y' out/.config; then
-            echo "::error::neither KSU_MANUAL_HOOK nor KSU_KPROBES_HOOK is enabled"; bad=1; fi
+          grep -E '^CONFIG_(KSU_MANUAL_HOOK|KSU_KPROBES_HOOK|KSU_SYSCALL_TABLE_HOOK|KPROBES|KRETPROBES)' out/.config
+          if ! grep -qxE 'CONFIG_KSU_(MANUAL_HOOK|KPROBES_HOOK|SYSCALL_TABLE_HOOK)=y' out/.config; then
+            echo "::error::no KSU hook mechanism is enabled (need one of MANUAL_HOOK / KPROBES_HOOK / SYSCALL_TABLE_HOOK)"; bad=1; fi
 
           # Note: CONFIG_ANDROID_PARANOID_NETWORK no longer exists on this CAF
           # 4.19 tree, so there is nothing to force off for container networking.
@@ -240,6 +255,10 @@ jobs:
           DEVICE_TARGET: X00TD
           EXTRA_CONFIG: vendor/extra/ksu.config vendor/extra/droidspaces.config
           MAKEFLAGS: -k
+          # See the header: without this the kernel reports KSU_VERSION=1 and the
+          # KernelSU-Next manager refuses to manage it (needs >= 33188).
+          KSU_VERSION_OVERRIDE: "33314"
+          KSU_VERSION_TAG_OVERRIDE: "v3.4.0-legacy"
         run: |
           set -euo pipefail
           sha=$(git -C ksrc rev-parse --short HEAD)
@@ -265,6 +284,19 @@ jobs:
             tail -n 40 "$LOG" || true
             exit 1
           fi
+
+          # Fail-closed on the KSU version. If KSU_VERSION_OVERRIDE did not reach
+          # the Kbuild (env vars are inherited by the kbuild sub-make), Kbuild
+          # silently falls back to KSU_VERSION=1 and the KernelSU-Next manager
+          # would refuse to manage the kernel. Never publish such a zip.
+          if grep -q "KernelSU-Next version fallback" "$LOG"; then
+            echo "::error::KernelSU-Next reported the fallback version 1 — the KSU_VERSION_OVERRIDE env var did not reach Kbuild"
+            grep -nE "KernelSU-Next (version|tag)" "$LOG" | head -n 5 || true
+            exit 1
+          fi
+          echo "--- KernelSU-Next version compiled into the kernel ---"
+          grep -E "KernelSU-Next (version|tag)" "$LOG" | sort -u
+
           test -s "$CI_ZIPNAME"
           unzip -l "$CI_ZIPNAME" | grep -E 'Image.gz-dtb|anykernel.sh'
           test -s out/arch/arm64/boot/Image.gz-dtb
@@ -290,8 +322,8 @@ jobs:
             echo "| Little cluster | 1.84 GHz (stock) |"
             echo "| EAS default governor | schedutil |"
             echo "| GPU | locked 430 MHz |"
-            echo "| Root | KernelSU-Next v3.2.0-legacy |"
-            echo "| SUSFS | v2.3.0 |"
+            echo "| Root | KernelSU-Next legacy HEAD 465490a26 (KSU 33314) |"
+            echo "| SUSFS | v2.3.0 (in-kernel, RSKSeven port) |"
             echo "| Containers | Droidspaces (full non-GKI config set) |"
             echo
             echo "### Flashing"
@@ -299,8 +331,11 @@ jobs:
             echo "(OrangeFox -> Backup -> Boot) so you can restore it if anything misbehaves."
             echo
             echo "### Notes"
-            echo "- KernelSU-Next needs its matching manager app (not the old KernelSU APK)."
-            echo "- SuSFS/NoMount are separate metamodules; install versions built for KernelSU-Next v3.2.0."
+            echo "- Install the KernelSU-Next Manager v3.4.2 (versionCode 33355). Do not"
+            echo "  use the old v3.2.x manager or the legacy KernelSU APK: the manager"
+            echo "  refuses kernels that report a version below 33188."
+            echo "- SuSFS is compiled into this kernel. The NoMount metamodule is a"
+            echo "  separate, optional install (github.com/maxsteeel/nomount/releases)."
             echo "- The OC speedbin override is a no-op on units whose efuse already selects the 2.2 GHz LUT."
             if [ -s "$RUNNER_TEMP/skipped.txt" ]; then
               echo
