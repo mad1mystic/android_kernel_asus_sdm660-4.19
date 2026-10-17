@@ -161,8 +161,8 @@ jobs:
           # must-have: containers cannot start / limits silently disappear without these
           for s in \
             SYSCTL SYSVIPC POSIX_MQUEUE NAMESPACES PID_NS UTS_NS IPC_NS NET_NS USER_NS \
-            SECCOMP SECCOMP_FILTER CGROUPS CGROUP_DEVICE CGROUP_SCHED FAIR_GROUP_SCHED \
-            CGROUP_FREEZER CGROUP_NET_PRIO MEMCG CFS_BANDWIDTH CGROUP_PIDS CGROUP_CPUACCT \
+            SECCOMP SECCOMP_FILTER CGROUPS CGROUP_DEVICE CGROUP_SCHED \
+            CGROUP_FREEZER CGROUP_NET_PRIO MEMCG CGROUP_PIDS CGROUP_CPUACCT \
             DEVTMPFS OVERLAY_FS TMPFS_POSIX_ACL TMPFS_XATTR FW_LOADER FW_LOADER_USER_HELPER \
             VETH BRIDGE BRIDGE_NETFILTER NETFILTER NETFILTER_ADVANCED NF_CONNTRACK \
             IP_NF_IPTABLES IP_NF_FILTER NF_NAT NF_TABLES IP_NF_TARGET_MASQUERADE \
@@ -173,6 +173,18 @@ jobs:
             MACVLAN FUSE_FS TUN BLK_DEV_LOOP EXT4_FS \
             KSU KSU_SUSFS CPU_FREQ_DEFAULT_GOV_SCHEDUTIL ; do
             if ! grep -qx "CONFIG_$s=y" out/.config; then echo "::error::MISSING required CONFIG_$s"; bad=1; fi
+          done
+
+          # FAIR_GROUP_SCHED / CFS_BANDWIDTH must stay OFF. The fair.c code under
+          # "#ifdef CONFIG_CFS_BANDWIDTH" is a broken half-merged graft that has
+          # never compiled (RSKSeven's defconfig ships FAIR_GROUP_SCHED=n). If a
+          # future defconfig starts selecting it, fail here with an explanation
+          # instead of dying 20 minutes later inside unthrottle_cfs_rq.
+          for s in FAIR_GROUP_SCHED CFS_BANDWIDTH; do
+            if grep -qx "CONFIG_$s=y" out/.config; then
+              echo "::error::CONFIG_$s got enabled; kernel/sched/fair.c does not compile with it on this tree"
+              bad=1
+            fi
           done
 
           # KernelSU needs a hooking mechanism, not specifically kprobes.
