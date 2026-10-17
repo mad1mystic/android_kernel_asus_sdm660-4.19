@@ -122,8 +122,11 @@ jobs:
           done
           [ "$found" = 1 ] || { echo "::error::no Droidspaces patches found"; exit 1; }
 
-      # Enabling MEMCG compiles mm/page_counter.c, which this tree ships using
-      # data_race() without defining it (the stock defconfig never built that file).
+      # Vestigial now that MEMCG is off: mm/page_counter.c is no longer compiled,
+      # so nothing consumes data_race(). Kept because it is a no-op by
+      # construction ("#ifndef data_race" + the macro expands to the expression
+      # unchanged) and because re-enabling MEMCG would otherwise break the build
+      # again: page_counter.c uses data_race() and this tree never defined it.
       - name: Compatibility fix (data_race) for CONFIG_MEMCG
         run: |
           set -euo pipefail
@@ -175,7 +178,7 @@ jobs:
           for s in \
             SYSCTL SYSVIPC POSIX_MQUEUE NAMESPACES PID_NS UTS_NS IPC_NS NET_NS USER_NS \
             SECCOMP SECCOMP_FILTER CGROUPS CGROUP_DEVICE CGROUP_SCHED \
-            CGROUP_FREEZER CGROUP_NET_PRIO MEMCG CGROUP_PIDS CGROUP_CPUACCT \
+            CGROUP_FREEZER CGROUP_NET_PRIO CGROUP_PIDS CGROUP_CPUACCT \
             DEVTMPFS OVERLAY_FS TMPFS_POSIX_ACL TMPFS_XATTR FW_LOADER FW_LOADER_USER_HELPER \
             VETH BRIDGE BRIDGE_NETFILTER NETFILTER NETFILTER_ADVANCED NF_CONNTRACK \
             IP_NF_IPTABLES IP_NF_FILTER NF_NAT NF_TABLES IP_NF_TARGET_MASQUERADE \
@@ -184,9 +187,40 @@ jobs:
             IPV6 IPV6_MULTIPLE_TABLES IP6_NF_IPTABLES IP6_NF_FILTER IP6_NF_MANGLE \
             IP6_NF_NAT IP6_NF_TARGET_MASQUERADE NF_NAT_IPV6 \
             MACVLAN FUSE_FS TUN BLK_DEV_LOOP EXT4_FS \
-            KSU KSU_SUSFS CPU_FREQ_DEFAULT_GOV_SCHEDUTIL ; do
+            KSU ANDROID_SIMPLE_LMK CPU_FREQ_DEFAULT_GOV_PERFORMANCE ; do
             if ! grep -qx "CONFIG_$s=y" out/.config; then echo "::error::MISSING required CONFIG_$s"; bad=1; fi
           done
+
+          # ANDROID_SIMPLE_LMK is the ONLY low-memory killer this ROM can use:
+          # there is no PSI (# CONFIG_PSI is not set) and no legacy
+          # ANDROID_LOW_MEMORY_KILLER in this tree, so if it disappears the
+          # kernel kills nothing and the phone reclaims itself to death (minutes
+          # at the boot splash, then a freeze -- what the 2026-10-17 builds did).
+          # It has "depends on !ANDROID_LOW_MEMORY_KILLER && !MEMCG && !PSI"
+          # (drivers/android/Kconfig:78), and when the dependency breaks kconfig
+          # drops the symbol SILENTLY -- there is no "is not set" line to find.
+          # So assert both halves: the killer is on, and both of its blockers
+          # are off. Do not remove MEMCG from this list to get "--memory" back.
+          echo "--- low memory killer ---"
+          grep -E '^(CONFIG_ANDROID_SIMPLE_LMK|CONFIG_MEMCG|CONFIG_PSI|CONFIG_ANDROID_LOW_MEMORY_KILLER)' out/.config \
+            || echo "(no LMK/MEMCG/PSI symbol at all)"
+          for s in MEMCG PSI ANDROID_LOW_MEMORY_KILLER; do
+            if grep -qx "CONFIG_$s=y" out/.config; then
+              echo "::error::CONFIG_$s must stay off on this kernel: it silently disables CONFIG_ANDROID_SIMPLE_LMK, leaving the phone with no low-memory killer (that is the 2026-10-17 slow-boot + freeze bug)"
+              bad=1
+            fi
+          done
+          if ! grep -qx 'CONFIG_ANDROID_SIMPLE_LMK=y' out/.config; then
+            echo "::error::CONFIG_ANDROID_SIMPLE_LMK did not survive the merge; refusing to ship a kernel with no low-memory killer"
+            bad=1
+          fi
+
+          # SuSFS is off by request (NoMount is the metamodule replacement).
+          # Fail closed if anything drags it back in.
+          if grep -qE '^CONFIG_KSU_SUSFS' out/.config; then
+            echo "::error::CONFIG_KSU_SUSFS* got enabled; this build is supposed to ship without SuSFS"
+            bad=1
+          fi
 
           # FAIR_GROUP_SCHED / CFS_BANDWIDTH must stay OFF. The fair.c code under
           # "#ifdef CONFIG_CFS_BANDWIDTH" is a broken half-merged graft that has
@@ -223,8 +257,8 @@ jobs:
           grep -E '^CONFIG_LOCALVERSION|^CONFIG_CPU_FREQ_DEFAULT_GOV' out/.config
           if ! grep -qx 'CONFIG_LOCALVERSION="-MysticKernel"' out/.config; then
             echo "::error::LOCALVERSION is not -MysticKernel"; bad=1; fi
-          if ! grep -qx 'CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y' out/.config; then
-            echo "::error::default governor is not schedutil (Kconfig fell back to performance)"; bad=1; fi
+          if ! grep -qx 'CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y' out/.config; then
+            echo "::error::default governor is not performance (tree default; schedutil was deliberately reverted after the 2026-10-17 freezes)"; bad=1; fi
 
           echo "--- optional options that did not stick (informational) ---"
           grep -E '^CONFIG_.*=y$' arch/arm64/configs/vendor/extra/droidspaces.config | while read -r l; do
@@ -323,10 +357,11 @@ jobs:
             echo "| Linux | 4.19.325 |"
             echo "| Big cluster | 2.20 GHz (OC) |"
             echo "| Little cluster | 1.84 GHz (stock) |"
-            echo "| EAS default governor | schedutil |"
+            echo "| Default governor | performance (stock; the ROM applies its own at runtime) |"
             echo "| GPU | locked 430 MHz |"
             echo "| Root | KernelSU-Next legacy HEAD 465490a26 (KSU 33314) |"
-            echo "| SUSFS | v2.3.0 (in-kernel, RSKSeven port) |"
+            echo "| SUSFS | disabled (use the NoMount metamodule) |"
+            echo "| Low memory killer | Simple LMK (MINFREE 130 MiB) |"
             echo "| Containers | Droidspaces (full non-GKI config set) |"
             echo
             echo "### Flashing"
@@ -337,8 +372,14 @@ jobs:
             echo "- Install the KernelSU-Next Manager v3.4.2 (versionCode 33355). Do not"
             echo "  use the old v3.2.x manager or the legacy KernelSU APK: the manager"
             echo "  refuses kernels that report a version below 33188."
-            echo "- SuSFS is compiled into this kernel. The NoMount metamodule is a"
-            echo "  separate, optional install (github.com/maxsteeel/nomount/releases)."
+            echo "- SUSFS is NOT compiled into this kernel (by request). For mount"
+            echo "  hiding install the NoMount metamodule:"
+            echo "  github.com/maxsteeel/nomount/releases."
+            echo "- MEMCG is deliberately off. On this ROM it silently disables"
+            echo "  ANDROID_SIMPLE_LMK, the only low-memory killer available here, which"
+            echo "  is what made the 2026-10-17 builds crawl through boot and freeze."
+            echo "  Consequence: Droidspaces' --memory limit is unavailable."
+            echo "- KernelSU-Next version in this kernel: 33314."
             echo "- The OC speedbin override is a no-op on units whose efuse already selects the 2.2 GHz LUT."
             if [ -s "$RUNNER_TEMP/skipped.txt" ]; then
               echo
