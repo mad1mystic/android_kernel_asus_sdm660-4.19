@@ -285,12 +285,15 @@ jobs:
             exit 1
           fi
 
-          # Fail-closed on the KSU version. If KSU_VERSION_OVERRIDE did not reach
-          # the Kbuild (env vars are inherited by the kbuild sub-make), Kbuild
-          # silently falls back to KSU_VERSION=1 and the KernelSU-Next manager
-          # would refuse to manage the kernel. Never publish such a zip.
-          if grep -q "KernelSU-Next version fallback" "$LOG"; then
-            echo "::error::KernelSU-Next reported the fallback version 1 — the KSU_VERSION_OVERRIDE env var did not reach Kbuild"
+          # Fail-closed on the KSU version. Note upstream's Kbuild prints BOTH
+          # lines: the "version fallback: 1" info line fires first (the vendored
+          # copy has no .git of its own), then the override block reassigns
+          # KSU_VERSION and the single ccflags-y is emitted after it, so the
+          # override is what actually gets compiled - the fallback line is just
+          # noise. Assert on the override line instead of on the fallback noise.
+          ver=$(grep -oE "KernelSU-Next version override: [0-9]+" "$LOG" | tail -n 1)
+          if [ "$ver" != "KernelSU-Next version override: $KSU_VERSION_OVERRIDE" ]; then
+            echo "::error::KSU version pin did not take effect (found: '${ver:-none}')"
             grep -nE "KernelSU-Next (version|tag)" "$LOG" | head -n 5 || true
             exit 1
           fi
