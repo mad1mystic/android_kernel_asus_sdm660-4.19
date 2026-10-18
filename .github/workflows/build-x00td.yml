@@ -428,21 +428,20 @@ jobs:
           test -s /tmp/Image
           python3 .github/ci/check_pernet_ops.py /tmp/Image out/System.map
 
-          # Camera DT gate: the built DTB (and the Image.gz-dtb that ships)
-          # must carry the LineageOS-proven X00TD camera sensor overlay. The
-          # in-tree rewrite of that overlay left ZERO sensors probing (whole
-          # camera subsystem registered, but no msm_sensor devices), so the
-          # camera provider crash-looped every ~5s and the camera was dead --
-          # on every build that shipped it. check_camera_dtb.sh decompiles the
-          # dtb with the kernel's own dtc and asserts the positive shape
-          # (3 cameras, 2 eeproms, flash nodes) AND the negative one (deleted
-          # nodes / custom gpio regulator gone), which can only hold if the
-          # overlay really applied on top of the QRD base.
-          test -f .github/ci/check_camera_dtb.sh || {
-            echo "::error::.github/ci/check_camera_dtb.sh is missing from this ref; the camera DT guard cannot run"
-            exit 1;
-          }
-          bash .github/ci/check_camera_dtb.sh out/arch/arm64/boot/Image.gz-dtb
+          # Camera DT gate: PAUSED (2026-10-18). The LineageOS-proven overlay
+          # swap does not compile against this tree yet (dtc rejects it: the
+          # QRD base references &cam_sensor_eldo3/4_default pin states that
+          # only the old rewrite defined inline, and the base's `qcom,ois`
+          # node (overlay deletes `qcom,ois@0` by a different name) keeps a
+          # dangling &cam_vaf_gpio_regulator supply). The old overlay is
+          # restored for this release, which this gate would correctly reject,
+          # so it must not run. Re-enable together with the camera fix;
+          # check_camera_dtb.sh stays in .github/ci/ for that.
+          # test -f .github/ci/check_camera_dtb.sh || {
+          #   echo "::error::.github/ci/check_camera_dtb.sh is missing from this ref; the camera DT guard cannot run"
+          #   exit 1;
+          # }
+          # bash .github/ci/check_camera_dtb.sh out/arch/arm64/boot/Image.gz-dtb
 
           # Broader sweep for the same class of bug in OTHER pernet objects. Only
           # global *_net_ops are visible in System.map, so a quiet run here proves
@@ -510,11 +509,11 @@ jobs:
             echo "  checks the built System.map so the bug class cannot come back."
             echo "- KernelSU-Next version in this kernel: 33314."
             echo "- The OC speedbin override is a no-op on units whose efuse already selects the 2.2 GHz LUT."
-            echo "- Camera: restored the LineageOS-proven X00TD camera sensor overlay."
-            echo "  The in-tree rewrite of that overlay left ZERO camera sensors probing"
-            echo "  (the whole camera subsystem registered, but no msm_sensor devices), so"
-            echo "  the camera provider crash-looped every ~5 s and the camera was dead."
-            echo "  CI now asserts the shipped DTB carries the proven sensor shape."
+            echo "- Camera: unchanged in this build (still the known-dead state: the"
+            echo "  in-tree sensor overlay rewrite leaves ZERO msm_sensor devices, so the"
+            echo "  provider crash-loops and no camera app can open). The LineageOS-proven"
+            echo "  overlay swap is prepared but paused: it needs two base-dtsi pin-state"
+            echo "  fixes before it compiles. Not included here."
             echo "- Goodix fingerprint: IRQ cleanup is now idempotent (GF_IOC_REMOVE and"
             echo "  close() both ran it, freeing the shared gpio-72 IRQ twice). This removes"
             echo "  the two boot-time 'WARNING: CPU' events; fingerprint hardware on this"
