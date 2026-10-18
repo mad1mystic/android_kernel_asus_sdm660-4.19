@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Checkout author's build scripts
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: rsuntk/asus_kernel_action
           path: authorci
@@ -144,7 +144,7 @@ jobs:
 
       - name: Cache toolchain
         id: tc
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/neutron-clang
           key: neutron-clang-06092026
@@ -399,7 +399,24 @@ jobs:
             echo "::error::.github/ci/check_pernet_ops.py is missing from this ref; the netns guard cannot run"
             exit 1
           }
-          unzip -p "$CI_ZIPNAME" Image.gz-dtb | gzip -dc > /tmp/Image
+          # Image.gz-dtb is Image.gz WITH the DTB appended (the CAT step of the
+          # kernel build), so `gzip -dc` reports "trailing garbage" and exits 2 on
+          # the DTB even though the kernel image decompressed fine -- under
+          # `set -euo pipefail` that failed this whole step before the check ran
+          # (run 39116294538). So assert the zip carries byte-identical input to
+          # out/, then decompress the pure gzip stream, which exits 0.
+          if [ ! -s out/arch/arm64/boot/Image.gz ]; then
+            echo "::error::out/arch/arm64/boot/Image.gz is missing; cannot verify the built image"
+            exit 1
+          fi
+          zip_sha=$(unzip -p "$CI_ZIPNAME" Image.gz-dtb | sha256sum | cut -d' ' -f1)
+          out_sha=$(sha256sum out/arch/arm64/boot/Image.gz-dtb | cut -d' ' -f1)
+          if [ "$zip_sha" != "$out_sha" ]; then
+            echo "::error::Image.gz-dtb in the zip ($zip_sha) != out/ copy ($out_sha); refusing to verify bytes that are not what ships"
+            exit 1
+          fi
+          echo "shipped Image.gz-dtb sha256=$zip_sha (identical to out/arch/arm64/boot/Image.gz-dtb)"
+          gzip -dc out/arch/arm64/boot/Image.gz > /tmp/Image
           test -s /tmp/Image
           python3 .github/ci/check_pernet_ops.py /tmp/Image out/System.map
 
@@ -481,7 +498,7 @@ jobs:
 
       - name: Upload debug files
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: debug
           include-hidden-files: true
