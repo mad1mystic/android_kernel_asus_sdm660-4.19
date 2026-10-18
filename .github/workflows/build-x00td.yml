@@ -170,7 +170,7 @@ jobs:
           clang --version | head -n 1 || { echo "::error::clang not found in toolchain"; exit 1; }
           cd ksrc
           M="make ARCH=arm64 LLVM=1 LLVM_IAS=1 O=out"
-          $M vendor/asus/X00TD_defconfig vendor/extra/ksu.config vendor/extra/droidspaces.config > /tmp/cfg.log 2>&1 || {
+          $M vendor/asus/X00TD_defconfig vendor/extra/ksu.config vendor/extra/droidspaces.config vendor/extra/mystic.config > /tmp/cfg.log 2>&1 || {
             tail -n 40 /tmp/cfg.log; echo "::error::defconfig failed"; exit 1; }
 
           bad=0
@@ -220,6 +220,14 @@ jobs:
           if grep -qE '^CONFIG_KSU_SUSFS' out/.config; then
             echo "::error::CONFIG_KSU_SUSFS* got enabled; this build is supposed to ship without SuSFS"
             bad=1
+          fi
+
+          # KALLSYMS_ALL is a Mystic extra (vendor/extra/mystic.config): crash
+          # reports resolve static symbols instead of raw addresses. Warning
+          # only -- it is a debug aid, not a functional requirement, so a
+          # kconfig hiccup must never block a release build on its own.
+          if ! grep -qx 'CONFIG_KALLSYMS_ALL=y' out/.config; then
+            echo "::warning::CONFIG_KALLSYMS_ALL did not merge (vendor/extra/mystic.config)"
           fi
 
           # FAIR_GROUP_SCHED / CFS_BANDWIDTH must stay OFF. The fair.c code under
@@ -311,7 +319,7 @@ jobs:
           TG_UPLOAD: "false"
           KCFLAGS_W: "false"
           DEVICE_TARGET: X00TD
-          EXTRA_CONFIG: vendor/extra/ksu.config vendor/extra/droidspaces.config
+          EXTRA_CONFIG: vendor/extra/ksu.config vendor/extra/droidspaces.config vendor/extra/mystic.config
           MAKEFLAGS: -k
           # See the header: without this the kernel reports KSU_VERSION=1 and the
           # KernelSU-Next manager refuses to manage it (needs >= 33188).
@@ -420,6 +428,22 @@ jobs:
           test -s /tmp/Image
           python3 .github/ci/check_pernet_ops.py /tmp/Image out/System.map
 
+          # Camera DT gate: the built DTB (and the Image.gz-dtb that ships)
+          # must carry the LineageOS-proven X00TD camera sensor overlay. The
+          # in-tree rewrite of that overlay left ZERO sensors probing (whole
+          # camera subsystem registered, but no msm_sensor devices), so the
+          # camera provider crash-looped every ~5s and the camera was dead --
+          # on every build that shipped it. check_camera_dtb.sh decompiles the
+          # dtb with the kernel's own dtc and asserts the positive shape
+          # (3 cameras, 2 eeproms, flash nodes) AND the negative one (deleted
+          # nodes / custom gpio regulator gone), which can only hold if the
+          # overlay really applied on top of the QRD base.
+          test -f .github/ci/check_camera_dtb.sh || {
+            echo "::error::.github/ci/check_camera_dtb.sh is missing from this ref; the camera DT guard cannot run"
+            exit 1;
+          }
+          bash .github/ci/check_camera_dtb.sh out/arch/arm64/boot/Image.gz-dtb
+
           # Broader sweep for the same class of bug in OTHER pernet objects. Only
           # global *_net_ops are visible in System.map, so a quiet run here proves
           # nothing on its own -- the check above is the authoritative one. Kept
@@ -486,6 +510,15 @@ jobs:
             echo "  checks the built System.map so the bug class cannot come back."
             echo "- KernelSU-Next version in this kernel: 33314."
             echo "- The OC speedbin override is a no-op on units whose efuse already selects the 2.2 GHz LUT."
+            echo "- Camera: restored the LineageOS-proven X00TD camera sensor overlay."
+            echo "  The in-tree rewrite of that overlay left ZERO camera sensors probing"
+            echo "  (the whole camera subsystem registered, but no msm_sensor devices), so"
+            echo "  the camera provider crash-looped every ~5 s and the camera was dead."
+            echo "  CI now asserts the shipped DTB carries the proven sensor shape."
+            echo "- Goodix fingerprint: IRQ cleanup is now idempotent (GF_IOC_REMOVE and"
+            echo "  close() both ran it, freeing the shared gpio-72 IRQ twice). This removes"
+            echo "  the two boot-time 'WARNING: CPU' events; fingerprint hardware on this"
+            echo "  build is CDFinger and is unaffected."
             if [ -s "$RUNNER_TEMP/skipped.txt" ]; then
               echo
               echo "### Droidspaces patches skipped"
