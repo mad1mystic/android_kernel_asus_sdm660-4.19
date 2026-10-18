@@ -359,38 +359,60 @@ jobs:
           grep -E "KernelSU-Next (version|tag)" "$LOG" | sort -u
 
           test -s "$CI_ZIPNAME"
-          unzip -l "$CI_ZIPNAME" | grep -E 'Image.gz-dtb|anykernel.sh'
           test -s out/arch/arm64/boot/Image.gz-dtb
+
+          # The AnyKernel3 template is cloned by authorci/build.sh from
+          # rsuntk/AnyKernel3 (branch X00TD) and still identifies as the VivLOS
+          # kernel -- which is the string OrangeFox prints during the flash.
+          # Rewrite just that one line so the zip announces itself as Mystic
+          # Kernel. device.name* is left untouched, so do.devicecheck still passes.
+          unzip -o -q "$CI_ZIPNAME" anykernel.sh -d "$RUNNER_TEMP/ak3"
+          sed -i 's/^kernel\.string=.*/kernel.string=Mystic Kernel for X00TD by mad1mystic/' \
+            "$RUNNER_TEMP/ak3/anykernel.sh"
+          ( cd "$RUNNER_TEMP/ak3" && zip -q "$GITHUB_WORKSPACE/ksrc/$CI_ZIPNAME" anykernel.sh )
+          akid=$(unzip -p "$CI_ZIPNAME" anykernel.sh | grep '^kernel.string=')
+          echo "AK3 identity after rebrand: $akid"
+          [ "$akid" = "kernel.string=Mystic Kernel for X00TD by mad1mystic" ] || {
+            echo "::error::anykernel.sh rebrand did not stick; OrangeFox would still show the VivLOS kernel"
+            exit 1
+          }
+
+          unzip -l "$CI_ZIPNAME" | grep -E 'Image.gz-dtb|anykernel.sh'
           echo "OK: $CI_ZIPNAME"
 
           # Same netns bug as the pre-build source gate, but proven against the
-          # built image instead of the source. System.map carries every symbol,
-          # static data included, so we can assert outright that ping's
-          # pernet_operations is not inside __init_begin..__init_end (the range
-          # free_initmem() unmaps) -- the one thing that made every Droidspaces
-          # container reboot the phone. Any other *_net_ops found there is only
-          # reported, since that is the style of bug that could bite next.
-          if [ ! -s out/System.map ]; then
-            echo "::warning::out/System.map not found; skipping the pernet-init-memory symbol check"
-          elif [ -z "$(awk '$3=="__init_end"{print $1; exit}' out/System.map)" ]; then
-            echo "::warning::__init_end is missing from System.map; skipping the netns symbol check"
-          else
+          # bytes that actually ship. This used to assert against System.map, which
+          # CANNOT see static data objects (CONFIG_KALLSYMS_ALL=n keeps only GLOBAL
+          # ones -- jiffies and init_net are there, ping_v4_net_ops is not), so it
+          # always printed "not in System.map" and skipped: a guard that could never
+          # fire, on exactly the object that mattered. See .github/ci/
+          # check_pernet_ops.py, which reads the relocation table out of the Image.
+          if [ ! -s "$CI_ZIPNAME" ]; then
+            echo "::error::$CI_ZIPNAME missing; nothing to verify"
+            exit 1
+          fi
+          command -v python3 >/dev/null || {
+            echo "::error::python3 is unavailable (authorci --setup-deps should install python-is-python3); cannot verify the built image"
+            exit 1
+          }
+          test -f .github/ci/check_pernet_ops.py || {
+            echo "::error::.github/ci/check_pernet_ops.py is missing from this ref; the netns guard cannot run"
+            exit 1
+          }
+          unzip -p "$CI_ZIPNAME" Image.gz-dtb | gzip -dc > /tmp/Image
+          test -s /tmp/Image
+          python3 .github/ci/check_pernet_ops.py /tmp/Image out/System.map
+
+          # Broader sweep for the same class of bug in OTHER pernet objects. Only
+          # global *_net_ops are visible in System.map, so a quiet run here proves
+          # nothing on its own -- the check above is the authoritative one. Kept
+          # because a hit is still worth a warning.
+          if [ -s out/System.map ]; then
             low48() { printf '%s' "${1: -12}"; }
             initb=$(awk '$3=="__init_begin"{print $1; exit}' out/System.map)
             inite=$(awk '$3=="__init_end"{print $1; exit}' out/System.map)
             ib=$((16#$(low48 "$initb"))); ie=$((16#$(low48 "$inite")))
             echo "System.map: __init_begin=$initb __init_end=$inite"
-            pv=$(awk '$3=="ping_v4_net_ops"{print $1; exit}' out/System.map)
-            if [ -n "$pv" ]; then
-              pp=$((16#$(low48 "$pv")))
-              if [ "$pp" -ge "$ib" ] && [ "$pp" -lt "$ie" ]; then
-                echo "::error::ping_v4_net_ops ($pv) is inside __init (freed + unmapped): creating a network namespace would oops and reboot"
-                exit 1
-              fi
-              echo "OK: ping_v4_net_ops ($pv) is outside the __init region"
-            else
-              echo "note: ping_v4_net_ops is not in System.map (CONFIG_PROC_FS off?) - nothing to check"
-            fi
             while read -r a n; do
               v=$((16#$(low48 "$a")))
               if [ "$v" -ge "$ib" ] && [ "$v" -lt "$ie" ]; then
