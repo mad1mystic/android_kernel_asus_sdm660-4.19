@@ -1182,7 +1182,21 @@ static void __net_exit ping_v4_proc_exit_net(struct net *net)
 	remove_proc_entry("icmp", net->proc_net);
 }
 
-static __initdata struct pernet_operations ping_v4_net_ops = {
+/*
+ * This object must NOT be in .init.data. ping_proc_init() registers it in the
+ * global pernet_list during boot and it has to stay valid for the lifetime of
+ * every network namespace, but free_initmem() unmaps the whole __init region
+ * (arch/arm64/mm/init.c). With a stray __initdata here, the first runtime walk
+ * of pernet_list -- which on Android is the first network-namespace creation,
+ * i.e. the first LXC/Droidspaces container -- reads ops->id/ops->size out of
+ * unmapped memory, oopses in ops_init(), and CONFIG_PANIC_ON_OOPS +
+ * PANIC_TIMEOUT=1 turn that into an instant reboot.
+ *
+ * Upstream has no attribute here. __net_initdata would also be correct: it
+ * expands to nothing while CONFIG_NET_NS=y and to __initdata only when there
+ * are no runtime namespaces at all (include/net/net_namespace.h).
+ */
+static struct pernet_operations ping_v4_net_ops = {
 	.init = ping_v4_proc_init_net,
 	.exit = ping_v4_proc_exit_net,
 };

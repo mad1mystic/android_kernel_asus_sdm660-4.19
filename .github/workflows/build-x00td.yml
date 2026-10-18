@@ -234,6 +234,30 @@ jobs:
             fi
           done
 
+          # A pernet_operations object that is registered during boot must NOT be
+          # placed in .init.data. free_initmem() unmaps the entire __init region
+          # (arch/arm64/mm/init.c -> unmap_kernel_range), so the first runtime walk
+          # of pernet_list dereferences unmapped memory. On Android that first walk
+          # is the first network-namespace creation -- i.e. the first LXC/Droidspaces
+          # container -- and ops_init() then oopses, which CONFIG_PANIC_ON_OOPS +
+          # PANIC_TIMEOUT=1 turn into an instant reboot with no trace on screen.
+          # net/ipv4/ping.c did exactly this ("static __initdata struct
+          # pernet_operations ping_v4_net_ops"), and it is inherited from the CAF
+          # base, so guard against it coming back.
+          # __net_initdata / __net_initconst are the correct spellings: while
+          # CONFIG_NET_NS=y they expand to nothing (the object stays in .data), and
+          # only when there are no runtime namespaces do they mean __initdata
+          # (include/net/net_namespace.h). Any other init attribute is a bug.
+          pernet_bad=$(grep -rnE 'struct pernet_operations' --include='*.c' --include='*.h' . 2>/dev/null \
+            | grep -E '__initdata|__initconst' | grep -vE '__net_initdata|__net_initconst' || true)
+          if [ -n "$pernet_bad" ]; then
+            echo "::error::a pernet_operations object is in freed + unmapped init memory; the first network-namespace creation (any Droidspaces/LXC container) would oops and reboot the phone"
+            echo "$pernet_bad"
+            bad=1
+          else
+            echo "pernet_operations objects: none placed in init memory"
+          fi
+
           # KernelSU needs a hooking mechanism, not specifically kprobes.
           # drivers/kernelsu/Kconfig sets KSU_MANUAL_HOOK=y whenever KPROBES is
           # absent (this tree's defconfig never enables KPROBES, and neither does
@@ -339,6 +363,42 @@ jobs:
           test -s out/arch/arm64/boot/Image.gz-dtb
           echo "OK: $CI_ZIPNAME"
 
+          # Same netns bug as the pre-build source gate, but proven against the
+          # built image instead of the source. System.map carries every symbol,
+          # static data included, so we can assert outright that ping's
+          # pernet_operations is not inside __init_begin..__init_end (the range
+          # free_initmem() unmaps) -- the one thing that made every Droidspaces
+          # container reboot the phone. Any other *_net_ops found there is only
+          # reported, since that is the style of bug that could bite next.
+          if [ ! -s out/System.map ]; then
+            echo "::warning::out/System.map not found; skipping the pernet-init-memory symbol check"
+          elif [ -z "$(awk '$3=="__init_end"{print $1; exit}' out/System.map)" ]; then
+            echo "::warning::__init_end is missing from System.map; skipping the netns symbol check"
+          else
+            low48() { printf '%s' "${1: -12}"; }
+            initb=$(awk '$3=="__init_begin"{print $1; exit}' out/System.map)
+            inite=$(awk '$3=="__init_end"{print $1; exit}' out/System.map)
+            ib=$((16#$(low48 "$initb"))); ie=$((16#$(low48 "$inite")))
+            echo "System.map: __init_begin=$initb __init_end=$inite"
+            pv=$(awk '$3=="ping_v4_net_ops"{print $1; exit}' out/System.map)
+            if [ -n "$pv" ]; then
+              pp=$((16#$(low48 "$pv")))
+              if [ "$pp" -ge "$ib" ] && [ "$pp" -lt "$ie" ]; then
+                echo "::error::ping_v4_net_ops ($pv) is inside __init (freed + unmapped): creating a network namespace would oops and reboot"
+                exit 1
+              fi
+              echo "OK: ping_v4_net_ops ($pv) is outside the __init region"
+            else
+              echo "note: ping_v4_net_ops is not in System.map (CONFIG_PROC_FS off?) - nothing to check"
+            fi
+            while read -r a n; do
+              v=$((16#$(low48 "$a")))
+              if [ "$v" -ge "$ib" ] && [ "$v" -lt "$ie" ]; then
+                echo "::warning::pernet symbol $n ($a) sits inside the __init region; registering it would oops the kernel on the first netns creation"
+              fi
+            done < <(awk '$3 ~ /_net_ops$/ {print $1, $3}' out/System.map) || true
+          fi
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -379,6 +439,12 @@ jobs:
             echo "  ANDROID_SIMPLE_LMK, the only low-memory killer available here, which"
             echo "  is what made the 2026-10-17 builds crawl through boot and freeze."
             echo "  Consequence: Droidspaces' --memory limit is unavailable."
+            echo "- Containers: starting a Droidspaces/LXC container used to oops the"
+            echo "  kernel and reboot the phone. net/ipv4/ping.c kept ping_v4_net_ops"
+            echo "  in .init.data, which free_initmem() frees and unmaps, so the first"
+            echo "  runtime walk of pernet_list (the container's unshare(CLONE_NEWNET))"
+            echo "  faulted inside ops_init(). The object now lives in .data, and CI"
+            echo "  checks the built System.map so the bug class cannot come back."
             echo "- KernelSU-Next version in this kernel: 33314."
             echo "- The OC speedbin override is a no-op on units whose efuse already selects the 2.2 GHz LUT."
             if [ -s "$RUNNER_TEMP/skipped.txt" ]; then
@@ -399,6 +465,7 @@ jobs:
           include-hidden-files: true
           path: |
             ksrc/out/.config
+            ksrc/out/System.map
             ksrc/out/compilation.log
             build.log
             merged.config
