@@ -351,6 +351,14 @@ static int irq_setup(struct gf_dev *gf_dev)
 
 static void irq_cleanup(struct gf_dev *gf_dev)
 {
+	/* Make the cleanup idempotent: GF_IOC_REMOVE and gf_release() both
+	 * land here. The unconditional version freed the (shared, gpio-72)
+	 * IRQ twice during boot, producing "Unbalanced IRQ 295 wake disable"
+	 * + "Trying to free already-free IRQ 295" warnings and leaving the
+	 * line in a broken state for the sibling CDFinger driver that
+	 * reuses it on this device. */
+	if (!gf_dev->irq_enabled)
+		return;
 	gf_dev->irq_enabled = 0;
 	disable_irq(gf_dev->irq);
 	disable_irq_wake(gf_dev->irq);
